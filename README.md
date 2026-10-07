@@ -83,3 +83,4 @@ Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para los pasos exactos de
 - [Contrato API](docs/API.md)
 - [Decisiones y límites](docs/DECISIONS.md)
 - [Dominio personalizado y DNS](docs/DOMAIN.md)
+- [Criterios de aceptación de la prueba](docs/ACCEPTANCE.md)
