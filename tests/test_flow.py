@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.agents import AgentFailure
+from app.agents import AgentFailure, ModelProvider
 from app.config import Settings
 from app.db import Base, Conversation, FileVersion, Message, Review, Run, Trace, make_engine, now
 from app.service import claim_next, latest_files, owner_hash, process_run
@@ -208,3 +208,38 @@ def test_same_conversation_runs_are_serial(store, config):
     process_run(store, first, config, execute_fake, old_lease)
     with store() as db:
         assert claim_next(db, config)[0] == second
+
+
+def test_model_timeout_counts_api_retries(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    class TimeoutClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("request timed out")
+
+    monkeypatch.setattr(agents.httpx, "Client", TimeoutClient)
+    monkeypatch.setattr(agents.time, "sleep", lambda _: None)
+    provider = ModelProvider(Settings(model_api_key="test-only", model_api_retries=2))
+    with pytest.raises(AgentFailure, match="agotó los reintentos"):
+        provider.call("planner", {"message": "Hello"})
+    assert provider.last_retries == 2
+
+
+def test_provider_retries_persist_separately(store, config):
+    class RetriedProvider(FakeProvider):
+        last_retries = 1
+
+    _, run_id = queued(store)
+    run = execute(store, config, run_id, RetriedProvider([PLAN, CODE, YES]))
+    assert run.attempts == 1
+    assert run.api_retries == 3
