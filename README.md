@@ -1,10 +1,10 @@
-# Ticket to Code Agents
+# Batcomputer
 
-Este módulo es un monolito con pipeline multiagente: convierte tickets en archivos mediante Planner, Coder, validación aislada y Reviewer. Cada turno persiste y muestra una respuesta final; trazas y archivos quedan separados. Está preparado para desplegar backend y frontend juntos en Railway como módulo independiente de Cartografunk.
+Batcomputer es un monolito con pipeline multiagente: convierte tickets en archivos mediante Planner, Coder, validación aislada y Reviewer. Cada turno persiste y muestra una respuesta final; trazas y archivos quedan separados. Este repositorio contiene la aplicación completa y se despliega por separado de la web principal de Cartografunk.
 
 ## Instalación local
 
-Requiere Python 3.11 o superior. En PowerShell:
+Requiere Python 3.11 o superior. Basta clonar [cartografunk/batcomputer](https://github.com/cartografunk/batcomputer); no necesita `cartografunk/cartografunk_web`. En PowerShell, desde la raíz de este repositorio:
 
 ```powershell
 python -m venv .venv
@@ -61,7 +61,7 @@ Las pruebas usan un proveedor de modelo simulado y un sandbox E2B simulado; no c
 ## Railway
 
 1. Cree una base Supabase/PostgreSQL propia para el módulo. Revise y aplique manualmente `migrations/001_initial.sql` y después `migrations/002_sandbox_and_recovery.sql` en esa base; no apuntar a un proyecto existente sin autorización específica. Las migraciones son aditivas.
-2. Cree un servicio Railway Hobby desde este repositorio privado, rama `main`. Railway detecta el `Dockerfile` de la raíz. Configure una réplica y el healthcheck HTTP `/health` en Railway. El Dockerfile escucha en `0.0.0.0:$PORT`.
+2. Cree un servicio Railway Hobby desde `cartografunk/batcomputer`, rama `main`. Railway detecta el `Dockerfile` de la raíz. Configure una réplica y el healthcheck HTTP `/health` en Railway. El Dockerfile escucha en `0.0.0.0:$PORT`.
 3. Configure en **Variables** del servicio: `DATABASE_URL`, `AUTH_TOKENS`, `MODEL_API_KEY`, `MODEL_NAME`, `MODEL_BASE_URL` si difiere del predeterminado y `E2B_API_KEY` si se desea ejecución aislada. Ajuste `CORS_ORIGINS` al origen público definitivo y los límites de `.env.example`. La imagen fija `APP_ENV=production` y exige PostgreSQL, autenticación y clave del modelo al arrancar. No copie secretos al repositorio ni al frontend.
 4. Pruebe primero el dominio temporal de Railway: `/health`, creación de conversación, ticket real, trazas, validación y Flappy Bird. El mismo contenedor sirve FastAPI y `app/static`; para sustituir la interfaz, coloque el build del diseñador (`index.html` y `assets/`) en `app/static` antes de construir la imagen. Las rutas `/api`, `/health` y `/flappy` permanecen reservadas.
 
@@ -69,11 +69,17 @@ El worker está dentro del mismo servicio: no hace falta un proceso Railway adic
 
 ## Cartografunk y dominio
 
-El módulo es independiente de [Cartografunk](https://cartografunk.com/). `agentes.cartografunk.com` es una propuesta, **no un subdominio configurado**. Cuando se apruebe: añada ese dominio al servicio Railway en Public Networking, copie exactamente los registros CNAME y TXT que Railway muestre al proveedor DNS, espere verificación y certificado HTTPS automático, y configure `CORS_ORIGINS` con el origen HTTPS definitivo. Después, agregue en la web principal un enlace hacia ese subdominio. No se cambió el sitio actual ni DNS. [Railway exige CNAME y TXT y emite HTTPS automáticamente](https://docs.railway.com/networking/domains/working-with-domains).
+| Repositorio | Función | Hosting previsto |
+|---|---|---|
+| `cartografunk/cartografunk_web` | Sitio existente en `www.cartografunk.com` | Hosting actual, sin cambios |
+| `cartografunk/batcomputer` | Frontend, FastAPI, LangGraph, pruebas y documentación | Servicio independiente en Railway |
 
-Si se exige `www.cartografunk.com/agentes`, el hosting actual de la web principal debe permitir un **proxy inverso por ruta** hacia Railway: reescritura de `/agentes/*`, preservación de método y cabeceras, soporte de WebSocket si se añade en el futuro, TLS de extremo a extremo y ajuste de rutas de assets, API y cookies para el prefijo. Hay que confirmar primero el proveedor y configuración de ese hosting. Esta variante no está implementada. La identidad visual final seguirá el diseño pendiente del diseñador; la interfaz incluida es provisional y reemplazable.
+La dirección propuesta para la aplicación es `batcomputer.cartografunk.com`; **no está configurada**. La integración prevista es un enlace llamado **Batcomputer** desde la web principal hacia ese subdominio. La aplicación ya ofrece un enlace de regreso a `www.cartografunk.com`. No se modificaron la web principal ni sus DNS. La identidad visual final seguirá el diseño que entregue el diseñador; la interfaz incluida es provisional y reemplazable.
+
+Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para los pasos exactos de Railway, verificación y HTTPS. Los nombres y valores de los registros se copiarán de Railway cuando se configure el dominio; este repositorio no los inventa. La alternativa bajo una ruta de `www.cartografunk.com` queda fuera de esta arquitectura y necesitaría confirmar primero el proxy del hosting actual.
 
 ## Documentos
 
 - [Contrato API](docs/API.md)
 - [Decisiones y límites](docs/DECISIONS.md)
+- [Dominio personalizado y DNS](docs/DOMAIN.md)

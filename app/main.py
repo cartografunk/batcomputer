@@ -71,7 +71,7 @@ async def lifespan(_app):
             pass
 
 
-app = FastAPI(title="Ticket to Code Agents", lifespan=lifespan)
+app = FastAPI(title="Batcomputer", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()],
                    allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
 frontend = Path(settings.frontend_dir).resolve()
