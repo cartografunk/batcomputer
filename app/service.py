@@ -1,14 +1,18 @@
 import hashlib
 import threading
 from datetime import timedelta
+from pathlib import Path
+
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from .agents import AgentFailure, ModelProvider, build_graph
+from .agents import AgentFailure, ModelProvider, TemporaryProviderFailure, build_graph
 from .config import Settings
 from .db import Conversation, FileVersion, Message, Plan, Review, Run, Trace, Validation, now, uid
 from .sandbox import E2BValidator
+from .state import WorkflowState
 
 
 def owner_hash(token: str) -> str:
@@ -24,12 +28,16 @@ def owned_run(db: Session, run_id: str, owner: str):
 
 
 def latest_files(db: Session, conversation_id: str, before_run: Run | None = None):
-    query = select(FileVersion, Run).join(Run).where(FileVersion.conversation_id == conversation_id, Run.status == "approved")
+    query = select(Run).where(Run.conversation_id == conversation_id, Run.status == "approved")
     if before_run:
         query = query.where(Run.created_at < before_run.created_at)
-    versions = db.execute(query.order_by(FileVersion.created_at, FileVersion.id)).all()
+    latest = db.scalar(query.order_by(Run.created_at.desc(), Run.id.desc()).limit(1))
+    if not latest:
+        return []
+    versions = db.scalars(select(FileVersion).where(FileVersion.run_id == latest.id)
+                          .order_by(FileVersion.created_at, FileVersion.id)).all()
     files = {}
-    for version, _ in versions:
+    for version in versions:
         files[version.path] = {"path": version.path, "content": version.content}
     return list(files.values())
 
@@ -117,7 +125,7 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             check_lease(run)
             run.heartbeat_at = now()
             run.updated_at = now()
-            if role in ("planner", "coder", "reviewer"):
+            if role in ("router", "question", "planner", "coder", "reviewer"):
                 run.api_retries += getattr(provider, "last_retries", 0)
             if role == "coder":
                 run.attempts = max(run.attempts, attempt)
@@ -135,6 +143,9 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
                     for file in output["files"]:
                         db.add(FileVersion(conversation_id=run.conversation_id, run_id=run_id,
                                            attempt=attempt, path=file["path"], content=file["content"]))
+                elif role == "documenter":
+                    db.add(FileVersion(conversation_id=run.conversation_id, run_id=run_id,
+                                       attempt=attempt, path="README.md", content=output["readme"]))
             db.commit()
 
     try:
@@ -147,10 +158,14 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             previous = latest_files(db, run.conversation_id, run)
             pending = db.get(Conversation, run.conversation_id).pending_clarification
             payload = {"message": message.content,
-                       "history": [{"role": m.role, "content": m.content} for m in history[-20:]],
+                       "history": [{"role": m.role, "content": m.content[:4000]} for m in history[-12:]],
                        "previous_files": previous, "pending_clarification": pending}
-        graph = build_graph(provider, settings, record, validator)
-        result = graph.invoke(payload)
+        checkpoint_path = Path(settings.langgraph_sqlite_path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+            graph = build_graph(provider, settings, record, validator, checkpointer=checkpointer)
+            result = graph.invoke(WorkflowState.model_validate(payload).model_dump(),
+                                  {"configurable": {"thread_id": run_id}})
         with session_factory() as db:
             run = db.get(Run, run_id)
             check_lease(run)
@@ -165,6 +180,17 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             db.commit()
     except LeaseLost:
         return
+    except TemporaryProviderFailure as exc:
+        with session_factory() as db:
+            run = db.get(Run, run_id)
+            check_lease(run)
+            run.status = "paused"
+            run.error = str(exc)
+            run.result = str(exc)
+            run.lease_id = None
+            run.updated_at = now()
+            db.add(Message(conversation_id=run.conversation_id, role="assistant", content=run.result))
+            db.commit()
     except Exception as exc:
         # Only public error text is persisted; provider exceptions may contain request headers.
         public = str(exc) if isinstance(exc, AgentFailure) else "Error técnico durante la ejecución. Inténtalo de nuevo."

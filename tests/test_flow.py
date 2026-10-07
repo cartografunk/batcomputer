@@ -6,10 +6,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.agents import AgentFailure, ModelProvider, TavilyResearcher, build_graph
+from app.agents import AgentFailure, ModelProvider, TavilyResearcher, TemporaryProviderFailure, build_graph
 from app.config import Settings
 from app.db import Base, Conversation, FileVersion, Message, Review, Run, Trace, make_engine, now
 from app.service import claim_next, latest_files, owner_hash, process_run
+from app.state import PlanOutput, WorkflowState
 
 
 class FakeProvider:
@@ -19,6 +20,10 @@ class FakeProvider:
 
     def call(self, role, payload):
         self.calls.append((role, payload))
+        if role == "router":
+            kind = "QUESTION" if "?" in payload["message"] or payload["message"].startswith("What ") else (
+                "MODIFICATION" if payload["has_previous_files"] else "NEW_TICKET")
+            return {"kind": kind, "reason": "Simulated route"}
         result = next(self.answers)
         if isinstance(result, Exception):
             raise result
@@ -33,8 +38,9 @@ def store(tmp_path):
 
 
 @pytest.fixture
-def config():
-    return Settings(auth_tokens="alice,bob", max_coder_attempts=3)
+def config(tmp_path):
+    return Settings(auth_tokens="alice,bob", max_coder_attempts=3,
+                    langgraph_sqlite_path=str(tmp_path / "checkpoints.sqlite"))
 
 
 def queued(store, owner="alice", conversation=None, content="Build app"):
@@ -52,7 +58,8 @@ def queued(store, owner="alice", conversation=None, content="Build app"):
         return conversation.id, run.id
 
 
-PLAN = {"kind": "code", "summary": "Create app", "steps": ["Implement"]}
+PLAN = {"kind": "code", "summary": "Create app", "criteria": [
+    {"description": "Provide app.py", "verification": "Inspect generated file"}]}
 CODE = {"summary": "Implemented app", "files": [{"path": "app.py", "content": "print('v1')"}]}
 YES = {"approved": True, "summary": "Looks good", "feedback": []}
 NO = {"approved": False, "summary": "Needs change", "feedback": ["Fix output"]}
@@ -73,7 +80,7 @@ def test_initial_approval(store, config):
     assert (run.status, run.attempts) == ("approved", 1)
     with store() as db:
         assert len(db.scalars(select(Review)).all()) == 1
-        assert len(db.scalars(select(FileVersion)).all()) == 1
+        assert len(db.scalars(select(FileVersion)).all()) == 2
 
 
 def test_rejection_correction_approval(store, config):
@@ -82,16 +89,99 @@ def test_rejection_correction_approval(store, config):
     fake = FakeProvider([PLAN, CODE, NO, revised, YES])
     run = execute(store, config, run_id, fake)
     assert (run.status, run.attempts) == ("approved", 2)
-    assert fake.calls[3][1]["review_feedback"] == ["Fix output"]
+    assert fake.calls[4][1]["review_feedback"] == ["Fix output"]
     with store() as db:
-        assert [f.attempt for f in db.scalars(select(FileVersion).order_by(FileVersion.attempt)).all()] == [1, 2]
-        assert latest_files(db, run.conversation_id) == revised["files"]
+        assert [f.attempt for f in db.scalars(select(FileVersion).order_by(FileVersion.attempt)).all()] == [1, 2, 2]
+        assert {f["path"] for f in latest_files(db, run.conversation_id)} == {"app.py", "README.md"}
 
 
 def test_exhaustion(store, config):
     _, run_id = queued(store)
     run = execute(store, config, run_id, FakeProvider([PLAN, CODE, NO, CODE, NO, CODE, NO]))
     assert (run.status, run.attempts) == ("exhausted", 3)
+    assert run.result == "Se alcanzó el límite de intentos de revisión. Error persistente detectado."
+
+
+def test_schema_requires_verifiable_criteria():
+    with pytest.raises(ValueError):
+        PlanOutput.model_validate({"kind": "code", "summary": "Incomplete", "criteria": []})
+    with pytest.raises(ValueError):
+        WorkflowState.model_validate({"message": "", "history": []})
+
+
+def test_syntax_failure_forces_rejection_without_llm_review(store, config):
+    _, run_id = queued(store)
+    broken = {"summary": "Broken", "files": [{"path": "app.py", "content": "def broken(:\n"}]}
+    fake = FakeProvider([PLAN, broken, CODE, YES])
+    run = execute(store, config, run_id, fake)
+    assert run.status == "approved"
+    assert run.attempts == 2
+    assert fake.calls[3][0] == "coder"
+    assert "invalid syntax" in " ".join(fake.calls[3][1]["review_feedback"])
+
+
+def test_provider_failure_pauses_and_can_requeue(store, config, monkeypatch):
+    import app.main as main
+    _, run_id = queued(store)
+    paused = execute(store, config, run_id, FakeProvider([
+        TemporaryProviderFailure("Fallo temporal del proveedor de IA. Tu estado está guardado. Intenta de nuevo.")]))
+    assert paused.status == "paused"
+    assert "estado está guardado" in paused.result
+    assert (config.langgraph_sqlite_path and __import__("pathlib").Path(config.langgraph_sqlite_path).exists())
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    response = TestClient(main.app).post(f"/api/runs/{run_id}/retry", headers={"Authorization": "Bearer alice"})
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+    with store() as db:
+        _, new_lease = claim_next(db, config)
+    process_run(store, run_id, config, FakeProvider([PLAN, CODE, YES]), new_lease)
+    with store() as db:
+        assert db.get(Run, run_id).status == "approved"
+
+
+def test_sse_streams_agent_events_and_enforces_owner(store, config, monkeypatch):
+    import app.main as main
+    conversation, run_id = queued(store)
+    execute(store, config, run_id, FakeProvider([PLAN, CODE, YES]))
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    client = TestClient(main.app)
+    url = f"/stream/{conversation}?run_id={run_id}"
+    assert client.get(url, headers={"Authorization": "Bearer bob"}).status_code == 404
+    response = client.get(url, headers={"Authorization": "Bearer alice"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"node": "Router"' in response.text
+    assert '"node": "Documenter"' in response.text
+
+
+def test_ollama_mode_needs_no_remote_api_key(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    seen = {}
+    class ChatClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            return httpx.Response(200, json={"choices": [{"message": {"content":
+                '{"kind":"NEW_TICKET","reason":"new work"}'}}]},
+                request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ChatClient)
+    provider = ModelProvider(Settings(model_mode="ollama", ollama_model_name="deepseek-coder"))
+    assert provider.call("router", {"message": "Build"})["kind"] == "NEW_TICKET"
+    assert seen["url"] == "http://127.0.0.1:11434/v1/chat/completions"
+    assert seen["json"]["model"] == "deepseek-coder"
 
 
 @pytest.mark.parametrize("bad", [{"summary": "missing kind"}, AgentFailure("El proveedor del modelo no respondió correctamente o agotó los reintentos.")])
@@ -111,18 +201,18 @@ def test_followup_uses_previous_code(store, config):
     fake = FakeProvider([PLAN, modified, YES])
     run = execute(store, config, second, fake)
     assert run.status == "approved"
-    assert fake.calls[0][1]["files"] == CODE["files"]
-    assert fake.calls[1][1]["previous_files"] == CODE["files"]
+    assert {f["path"] for f in fake.calls[1][1]["files"]} == {"app.py", "README.md"}
+    assert {f["path"] for f in fake.calls[2][1]["previous_files"]} == {"app.py", "README.md"}
 
 
 def test_question_does_not_reimplement(store, config):
     conversation, first = queued(store)
     execute(store, config, first, FakeProvider([PLAN, CODE, YES]))
     _, second = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")), content="What does it do?")
-    fake = FakeProvider([{"kind": "question", "summary": "Explain", "answer": "It prints v1.", "steps": []}])
+    fake = FakeProvider([{"answer": "It prints v1."}])
     run = execute(store, config, second, fake)
     assert run.status == "answered"
-    assert [role for role, _ in fake.calls] == ["planner"]
+    assert [role for role, _ in fake.calls] == ["router", "question"]
 
 
 def test_separation_and_interrupted_recovery(store, config):
@@ -175,7 +265,7 @@ def test_http_async_round_trip(store, config, monkeypatch):
             time.sleep(0.05)
         assert result["status"] == "approved"
         assert result["validation_status"] == "not_executed"
-        assert len(client.get(f"/api/runs/{run_id}/traces", headers=headers).json()) == 4
+        assert len(client.get(f"/api/runs/{run_id}/traces", headers=headers).json()) == 6
         assert client.get(f"/api/runs/{run_id}/files", headers=headers).json()[0]["content"] == "print('v1')"
 
 
@@ -231,16 +321,16 @@ def test_model_timeout_counts_api_retries(monkeypatch):
     monkeypatch.setattr(agents.httpx, "Client", TimeoutClient)
     monkeypatch.setattr(agents.time, "sleep", lambda _: None)
     provider = ModelProvider(Settings(model_api_key="test-only", model_api_retries=2))
-    with pytest.raises(AgentFailure, match="agotó los reintentos"):
+    with pytest.raises(AgentFailure, match="Fallo temporal"):
         provider.call("planner", {"message": "Hello"})
     assert provider.last_retries == 2
 
 
 def test_research_is_requested_once_and_grounded():
     config = Settings(tavily_api_key="test-only")
-    first = {"kind": "code", "summary": "Check current API", "steps": [],
+    first = {"kind": "code", "summary": "Check current API", "criteria": PLAN["criteria"],
              "research_query": "current library API"}
-    final = {"kind": "code", "summary": "Use documented API", "steps": ["Build"],
+    final = {"kind": "code", "summary": "Use documented API", "criteria": PLAN["criteria"],
              "research_query": "search again"}
     fake = FakeProvider([first, final, CODE, YES])
 
@@ -261,26 +351,20 @@ def test_research_is_requested_once_and_grounded():
     result = graph.invoke({"message": "Build against the latest API", "history": [], "previous_files": []})
     assert result["status"] == "approved"
     assert researcher.calls == ["current library API"]
-    assert fake.calls[1][1]["research_results"][0]["url"] == "https://example.com/docs"
-    assert [trace[0] for trace in traces] == ["planner", "research", "planner", "coder", "validator", "reviewer"]
+    assert fake.calls[2][1]["research_results"][0]["url"] == "https://example.com/docs"
+    assert [trace[0] for trace in traces] == ["router", "planner", "research", "planner", "coder", "validator", "reviewer", "documenter"]
 
 
-def test_research_can_answer_a_current_question():
-    config = Settings(tavily_api_key="test-only")
-    fake = FakeProvider([
-        {"kind": "question", "summary": "Need current docs", "research_query": "latest API docs"},
-        {"kind": "question", "summary": "Found docs", "answer": "See https://example.com/docs"},
-    ])
-    class FakeResearcher:
-        def search(self, _query):
-            return [{"title": "Docs", "url": "https://example.com/docs", "content": "latest"}]
+def test_question_uses_dedicated_node():
+    config = Settings()
+    fake = FakeProvider([{"answer": "See the existing files."}])
     class Validator:
         def validate(self, _files):
             raise AssertionError("question should not generate code")
-    graph = build_graph(fake, config, lambda *_: None, Validator(), FakeResearcher())
+    graph = build_graph(fake, config, lambda *_: None, Validator())
     result = graph.invoke({"message": "What is current?", "history": [], "previous_files": []})
     assert result["status"] == "answered"
-    assert result["result"] == "See https://example.com/docs"
+    assert result["result"] == "See the existing files."
 
 
 def test_tavily_bounds_results_and_uses_bearer(monkeypatch):
@@ -376,6 +460,34 @@ def test_gemini_reviewer_can_use_separate_key(monkeypatch):
     assert calls[1][1]["headers"]["Authorization"] == "Bearer gemini-test"
 
 
+def test_router_can_use_a_smaller_model_with_same_key(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    models = []
+    class ChatClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            models.append(kwargs["json"]["model"])
+            return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]},
+                                  request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ChatClient)
+    provider = ModelProvider(Settings(model_api_key="test-only", model_name="gpt-6.1-sol",
+                                      router_model_name="some-nano"))
+    provider.call("router", {})
+    provider.call("planner", {})
+    assert models == ["some-nano", "gpt-6.1-sol"]
+
+
 def test_provider_retries_persist_separately(store, config):
     class RetriedProvider(FakeProvider):
         last_retries = 1
@@ -383,22 +495,22 @@ def test_provider_retries_persist_separately(store, config):
     _, run_id = queued(store)
     run = execute(store, config, run_id, RetriedProvider([PLAN, CODE, YES]))
     assert run.attempts == 1
-    assert run.api_retries == 3
+    assert run.api_retries == 4
 
 
 def test_clarification_persists_until_followup(store, config):
     conversation, first = queued(store, content="Build a map")
-    clarification = {"kind": "clarification", "summary": "Missing projection", "steps": [],
-                     "answer": "Which coordinate system should I use?"}
+    clarification = {"kind": "clarification", "summary": "Missing projection", "criteria": [],
+                     "clarification_question": "Which coordinate system should I use?"}
     run = execute(store, config, first, FakeProvider([clarification]))
     assert run.status == "needs_clarification"
     with store() as db:
-        assert db.get(Conversation, conversation).pending_clarification == clarification["answer"]
+        assert db.get(Conversation, conversation).pending_clarification == clarification["clarification_question"]
     _, second = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")), content="Use WGS84")
     fake = FakeProvider([PLAN, CODE, YES])
     run = execute(store, config, second, fake)
     assert run.status == "approved"
-    assert fake.calls[0][1]["pending_clarification"] == clarification["answer"]
+    assert fake.calls[1][1]["pending_clarification"] == clarification["clarification_question"]
     with store() as db:
         assert db.get(Conversation, conversation).pending_clarification is None
 

@@ -1,3 +1,6 @@
+from typing import Literal
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -5,17 +8,22 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     app_env: str = "development"
     database_url: str = "sqlite:///./local.db"
+    langgraph_sqlite_path: str = "./langgraph_state.sqlite"
     auth_tokens: str = ""
     model_api_key: str = ""
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4.1-mini"
+    router_model_name: str = ""
+    model_mode: Literal["remote", "ollama"] = "remote"
+    ollama_base_url: str = "http://127.0.0.1:11434/v1"
+    ollama_model_name: str = "deepseek-coder"
     gemini_api_key: str = ""
     gemini_model_name: str = "gemini-3.8-flash"
     gemini_roles: str = ""
     tavily_api_key: str = ""
     tavily_max_results: int = 3
     tavily_timeout_seconds: float = 10
-    max_coder_attempts: int = 3
+    max_coder_attempts: int = Field(default=3, ge=1, le=3)
     max_job_recoveries: int = 2
     max_concurrent_runs: int = 2
     max_queued_runs_per_owner: int = 10

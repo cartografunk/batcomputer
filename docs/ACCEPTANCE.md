@@ -4,15 +4,15 @@ Este documento resume con palabras propias el enunciado facilitado para la prueb
 
 | Criterio | Evidencia en Batcomputer | Estado |
 |---|---|---|
-| Ticket libre convertido en código mediante Planner, Coder y Reviewer | Grafo en `app/agents.py`; proveedor configurable | Implementado; falta probar calidad con un modelo real |
+| Ticket libre convertido en código mediante Router, Planner, Coder, Tester, Reviewer y Documenter | Grafo en `app/agents.py`, contratos en `app/state.py`; proveedor configurable | Implementado; falta probar calidad con un modelo real |
 | Rechazo con feedback, corrección y límite explícito | `MAX_CODER_ATTEMPTS=3`, estado `exhausted`, versiones y revisiones persistidas | Verificado con proveedor simulado |
 | Chat de varios turnos y cambios sobre archivos previos | Conversaciones, mensajes, archivos aprobados y aclaraciones pendientes en base de datos | Verificado con proveedor simulado |
-| Una respuesta final por turno y trazas consultables aparte | Chat mínimo y endpoints `/api/runs/{id}`, `/traces`, `/files` | Verificado localmente |
-| Timeouts, JSON malformado y errores comprensibles | Reintentos técnicos separados y estado `technical_error` | Verificado con proveedor simulado |
+| Una respuesta final por turno y trazas aparte en vivo | Chat, `/stream/{session_id}` por SSE y endpoints de trazas y archivos | Verificado localmente |
+| Timeouts, JSON malformado y errores comprensibles | Tenacity, checkpoint SQLite, estados `paused` y `technical_error` | Verificado con proveedor simulado |
 | Clave del modelo fuera del repositorio | `MODEL_API_KEY` únicamente en variables del servidor | Implementado; revisar variables de Railway antes del despliegue |
 | Aplicación pública de una sola página y disponible el día de la entrevista | Dockerfile, `/health`, frontend servido por FastAPI, guía de Railway | **Pendiente:** desplegar, entregar URL y supervisar disponibilidad |
 | Repositorio con instalación, variables, arquitectura y resumen | `README.md`, `docs/API.md`, `docs/DECISIONS.md` | Implementado |
-| Flappy Bird jugable | Página `/flappy` | Implementado; integración con chat pendiente de confirmación |
+| Flappy Bird jugable | Página `/flappy`; el chat acepta entregas HTML5 y las muestra en iframe restringido | Implementado; falta comprobar generación real del juego |
 
 ## Prueba manual antes de la entrevista
 

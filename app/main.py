@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
@@ -54,8 +55,10 @@ async def lifespan(_app):
     if settings.app_env == "production":
         if not settings.database_url.startswith("postgresql+psycopg://"):
             raise RuntimeError("Production requires PostgreSQL DATABASE_URL")
-        if not settings.auth_tokens.strip() or not settings.model_api_key.strip():
+        if not settings.auth_tokens.strip() or (settings.model_mode != "ollama" and not settings.model_api_key.strip()):
             raise RuntimeError("Production requires AUTH_TOKENS and MODEL_API_KEY")
+        if not Path(settings.langgraph_sqlite_path).is_absolute():
+            raise RuntimeError("Production requires a persistent absolute LANGGRAPH_SQLITE_PATH")
         if not (Path(settings.frontend_dir) / "index.html").is_file():
             raise RuntimeError("Production requires a frontend index.html")
     if settings.database_url.startswith("sqlite"):
@@ -163,6 +166,22 @@ def get_run(run_id: str, owner: str = Depends(auth), db: Session = Depends(db_se
     return public_run(run)
 
 
+@app.post("/api/runs/{run_id}/retry", status_code=202)
+def retry_run(run_id: str, owner: str = Depends(auth), db: Session = Depends(db_session)):
+    run = owned_run(db, run_id, owner)
+    if not run:
+        raise HTTPException(404, "Ejecución no encontrada")
+    if run.status != "paused":
+        raise HTTPException(409, "Solo se puede reintentar un trabajo pausado")
+    run.status = "queued"
+    run.error = None
+    run.result = None
+    run.attempts = 0
+    run.updated_at = now()
+    db.commit()
+    return {"run_id": run.id, "status": run.status}
+
+
 @app.get("/api/runs/{run_id}/traces")
 def get_traces(run_id: str, owner: str = Depends(auth), db: Session = Depends(db_session)):
     if not owned_run(db, run_id, owner):
@@ -170,6 +189,49 @@ def get_traces(run_id: str, owner: str = Depends(auth), db: Session = Depends(db
     traces = db.scalars(select(Trace).where(Trace.run_id == run_id).order_by(Trace.created_at, Trace.id)).all()
     return [{"stage": t.stage, "attempt": t.attempt, "duration_ms": t.duration_ms,
              "input": t.input, "output": t.output, "error": t.error, "created_at": t.created_at} for t in traces]
+
+
+@app.get("/stream/{session_id}")
+async def stream_run(session_id: str, run_id: str, owner: str = Depends(auth), db: Session = Depends(db_session)):
+    run = owned_run(db, run_id, owner)
+    if not run or run.conversation_id != session_id:
+        raise HTTPException(404, "Ejecución no encontrada")
+
+    async def events():
+        seen = set()
+        last_status = None
+        terminal = {"approved", "answered", "needs_clarification", "exhausted", "technical_error", "paused"}
+        while True:
+            with SessionLocal() as current:
+                run = owned_run(current, run_id, owner)
+                if not run:
+                    return
+                traces = current.scalars(select(Trace).where(Trace.run_id == run_id)
+                                         .order_by(Trace.created_at, Trace.id)).all()
+                status = run.status
+            if status != last_status:
+                data = {"node": "Workflow", "status": status, "run_id": run_id}
+                yield f"event: status\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                last_status = status
+            for trace in traces:
+                if trace.id in seen:
+                    continue
+                seen.add(trace.id)
+                label = trace.stage.capitalize()
+                detail = (trace.output or {}).get("summary") or trace.error or (
+                    "Rechazado" if trace.stage == "reviewer" and
+                    not (trace.output or {}).get("approved", True) else "Completado")
+                if trace.stage == "reviewer":
+                    detail += f" (Intento {trace.attempt}/{settings.max_coder_attempts})"
+                data = {"node": label, "status": detail, "attempt": trace.attempt,
+                        "duration_ms": trace.duration_ms}
+                yield f"id: {trace.id}\nevent: trace\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            if status in terminal:
+                return
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/runs/{run_id}/files")

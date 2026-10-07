@@ -89,3 +89,15 @@ def test_without_key_is_not_executed():
 def test_non_python_is_not_claimed_validated():
     result = E2BValidator(Settings(e2b_api_key="fake-key")).validate([{"path": "index.html", "content": "<h1>Hello</h1>"}])
     assert result["status"] == "not_executed"
+
+
+def test_inline_javascript_is_syntax_checked_in_sandbox(monkeypatch):
+    import app.sandbox as module
+    monkeypatch.setattr(module, "Sandbox", FakeSandbox)
+    FakeSandbox.instances.clear()
+    FakeSandbox.failure = False
+    result = E2BValidator(Settings(e2b_api_key="fake-key")).validate([
+        {"path": "index.html", "content": "<canvas></canvas><script>const score = 1;</script>"}])
+    assert result["status"] == "passed"
+    assert any("node --check" in command for command, _ in FakeSandbox.instances[-1].commands.calls)
+    assert any(path.endswith("_inline_0_0.js") for path, _ in FakeSandbox.instances[-1].files.writes)
