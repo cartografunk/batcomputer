@@ -15,3 +15,14 @@ CREATE INDEX IF NOT EXISTS ix_file_versions_conversation_id ON file_versions(con
 CREATE INDEX IF NOT EXISTS ix_file_versions_run_id ON file_versions(run_id);
 CREATE TABLE IF NOT EXISTS traces (id varchar(36) PRIMARY KEY, run_id varchar(36) NOT NULL REFERENCES runs(id), stage varchar(32) NOT NULL, attempt integer NOT NULL DEFAULT 0, duration_ms integer NOT NULL DEFAULT 0, input jsonb NOT NULL, output jsonb NOT NULL, error text, created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS ix_traces_run_id ON traces(run_id);
+
+-- The API and worker connect to PostgreSQL directly. Browser clients must not
+-- reach these internal tables through Supabase's Data API.
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE file_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE traces ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON conversations, messages, runs, plans, reviews, file_versions, traces FROM anon, authenticated;
