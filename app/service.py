@@ -1,13 +1,14 @@
 import hashlib
-import json
+import threading
 from datetime import timedelta
 
-from sqlalchemy import and_, exists, func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .agents import AgentFailure, ModelProvider, build_graph
 from .config import Settings
-from .db import Conversation, FileVersion, Message, Plan, Review, Run, Trace, now, uid
+from .db import Conversation, FileVersion, Message, Plan, Review, Run, Trace, Validation, now, uid
+from .sandbox import E2BValidator
 
 
 def owner_hash(token: str) -> str:
@@ -34,24 +35,37 @@ def latest_files(db: Session, conversation_id: str, before_run: Run | None = Non
 
 
 def claim_next(db: Session, settings: Settings):
+    if db.bind.dialect.name == "postgresql":
+        # One short transaction coordinates claims and the global concurrency limit.
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(4532751))):
+            db.rollback()
+            return None
     stale = now() - timedelta(seconds=settings.job_stale_seconds)
-    db.execute(update(Run).where(Run.status == "running", Run.heartbeat_at < stale).values(status="queued", updated_at=now()))
-    db.commit()
+    for interrupted in db.scalars(select(Run).where(Run.status == "running", Run.heartbeat_at < stale)).all():
+        interrupted.lease_id = None
+        interrupted.updated_at = now()
+        if interrupted.recovery_count >= settings.max_job_recoveries:
+            interrupted.status = "technical_error"
+            interrupted.error = "El trabajo se interrumpió repetidamente; vuelve a enviar el mensaje."
+            interrupted.result = interrupted.error
+            db.add(Message(conversation_id=interrupted.conversation_id, role="assistant", content=interrupted.result))
+        else:
+            interrupted.status = "queued"
+            interrupted.recovery_count += 1
+    db.flush()
+    running_count = db.scalar(select(func.count(Run.id)).where(Run.status == "running"))
+    if running_count >= settings.max_concurrent_runs:
+        db.commit()
+        return None
     queued = db.scalars(select(Run).where(Run.status == "queued").order_by(Run.created_at, Run.id).limit(50)).all()
     for candidate in queued:
-        if db.bind.dialect.name == "postgresql":
-            # Serializes claims for one conversation across Railway replicas.
-            locked = db.scalar(select(func.pg_try_advisory_xact_lock(func.hashtext(candidate.conversation_id))))
-            if not locked:
-                db.rollback()
-                continue
         running = db.scalar(select(Run.id).where(Run.conversation_id == candidate.conversation_id, Run.status == "running"))
         earlier = db.scalar(select(Run.id).where(
             Run.conversation_id == candidate.conversation_id, Run.status == "queued",
-            Run.created_at < candidate.created_at,
+            or_(Run.created_at < candidate.created_at,
+                and_(Run.created_at == candidate.created_at, Run.id < candidate.id)),
         ))
         if running or earlier:
-            db.rollback()
             continue
         lease_id = uid()
         changed = db.execute(update(Run).where(Run.id == candidate.id, Run.status == "queued").values(
@@ -60,7 +74,7 @@ def claim_next(db: Session, settings: Settings):
         if changed.rowcount:
             db.commit()
             return candidate.id, lease_id
-        db.rollback()
+    db.commit()
     return None
 
 
@@ -68,8 +82,30 @@ class LeaseLost(Exception):
     pass
 
 
-def process_run(session_factory, run_id: str, settings: Settings, provider=None, lease_id=None):
+def process_run(session_factory, run_id: str, settings: Settings, provider=None, lease_id=None, validator=None):
     provider = provider or ModelProvider(settings)
+    validator = validator or E2BValidator(settings)
+    heartbeat_stop = threading.Event()
+
+    def heartbeat():
+        interval = max(0.2, min(settings.job_stale_seconds / 3, 20))
+        while not heartbeat_stop.wait(interval):
+            try:
+                with session_factory() as db:
+                    changed = db.execute(update(Run).where(
+                        Run.id == run_id, Run.status == "running", Run.lease_id == lease_id
+                    ).values(heartbeat_at=now()))
+                    db.commit()
+                    if not changed.rowcount:
+                        return
+            except Exception:
+                # The worker's stale-job recovery handles a persistent outage.
+                pass
+
+    heartbeat_thread = None
+    if lease_id is not None:
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
 
     def check_lease(run):
         if lease_id is not None and (run.lease_id != lease_id or run.status != "running"):
@@ -81,7 +117,10 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             check_lease(run)
             run.heartbeat_at = now()
             run.updated_at = now()
-            run.api_retries += getattr(provider, "last_retries", 0)
+            if role in ("planner", "coder", "reviewer"):
+                run.api_retries += getattr(provider, "last_retries", 0)
+            if role == "coder":
+                run.attempts = max(run.attempts, attempt)
             db.add(Trace(run_id=run_id, stage=role, attempt=attempt, duration_ms=duration,
                          input=payload, output=output, error=error))
             if not error:
@@ -89,8 +128,10 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
                     db.add(Plan(run_id=run_id, content=output))
                 elif role == "reviewer":
                     db.add(Review(run_id=run_id, attempt=attempt, content=output))
+                elif role == "validator":
+                    run.validation_status = output["status"]
+                    db.add(Validation(run_id=run_id, attempt=attempt, status=output["status"], content=output))
                 elif role == "coder":
-                    run.attempts = attempt
                     for file in output["files"]:
                         db.add(FileVersion(conversation_id=run.conversation_id, run_id=run_id,
                                            attempt=attempt, path=file["path"], content=file["content"]))
@@ -104,10 +145,11 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             history = db.scalars(select(Message).where(Message.conversation_id == run.conversation_id,
                                                        Message.created_at < message.created_at).order_by(Message.created_at)).all()
             previous = latest_files(db, run.conversation_id, run)
+            pending = db.get(Conversation, run.conversation_id).pending_clarification
             payload = {"message": message.content,
                        "history": [{"role": m.role, "content": m.content} for m in history[-20:]],
-                       "previous_files": previous}
-        graph = build_graph(provider, settings, record)
+                       "previous_files": previous, "pending_clarification": pending}
+        graph = build_graph(provider, settings, record, validator)
         result = graph.invoke(payload)
         with session_factory() as db:
             run = db.get(Run, run_id)
@@ -116,6 +158,9 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             run.result = result["result"]
             run.attempts = result.get("attempts", 0)
             run.updated_at = now()
+            db.get(Conversation, run.conversation_id).pending_clarification = (
+                result["result"] if result["status"] == "needs_clarification" else None
+            )
             db.add(Message(conversation_id=run.conversation_id, role="assistant", content=run.result))
             db.commit()
     except LeaseLost:
@@ -132,10 +177,14 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             run.updated_at = now()
             db.add(Message(conversation_id=run.conversation_id, role="assistant", content=public))
             db.commit()
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
 
 
 def public_run(run: Run):
     return {"id": run.id, "conversation_id": run.conversation_id, "status": run.status,
             "result": run.result, "attempts": run.attempts, "api_retries": run.api_retries,
-            "execution": "not_executed",
+            "validation_status": run.validation_status, "recovery_count": run.recovery_count,
             "error": run.error, "created_at": run.created_at, "updated_at": run.updated_at}

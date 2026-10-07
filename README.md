@@ -1,6 +1,6 @@
 # Ticket to Code Agents
 
-Un chat convierte tickets de programación en archivos mediante Planner, Coder y Reviewer. Cada turno queda persistido y el usuario recibe una respuesta final; los detalles de agentes se consultan por separado. El código generado se revisa estáticamente y se marca siempre como no ejecutado.
+Este módulo es un monolito con pipeline multiagente: convierte tickets en archivos mediante Planner, Coder, validación aislada y Reviewer. Cada turno persiste y muestra una respuesta final; trazas y archivos quedan separados. Está preparado para desplegar backend y frontend juntos en Railway como módulo independiente de Cartografunk.
 
 ## Instalación local
 
@@ -14,23 +14,25 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Abra `http://localhost:8000`, introduzca un token configurado en `AUTH_TOKENS` y envíe un ticket. La página `/flappy` es independiente; su integración con el chat espera confirmación. SQLite sirve para desarrollo local y crea tablas automáticamente. Para producción, use PostgreSQL y ejecute `migrations/001_initial.sql` antes de iniciar.
+Abra `http://localhost:8000`, introduzca un token configurado en `AUTH_TOKENS` y envíe un ticket. `/flappy` es un juego independiente y jugable; su integración con el chat espera confirmación. SQLite sirve solo para desarrollo local y crea tablas automáticamente. Producción requiere Supabase/PostgreSQL y las migraciones `001_initial.sql` y `002_sandbox_and_recovery.sql`, en ese orden.
 
 ## Variables
 
-Vea `.env.example`. `DATABASE_URL` admite `sqlite:///./local.db` o una URL `postgresql+psycopg://...` de Supabase/PostgreSQL. `AUTH_TOKENS` contiene tokens de acceso separados por comas; use tokens largos distintos por usuario y no los incluya en el repositorio. `MODEL_API_KEY` queda exclusivamente en el servidor. `MODEL_BASE_URL` debe ser compatible con Chat Completions y `response_format=json_object`; `MODEL_NAME` selecciona el modelo. `MAX_CODER_ATTEMPTS=3` significa implementación inicial y dos correcciones. `MODEL_API_RETRIES` cuenta los reintentos de red/429/5xx por llamada, independientes de las correcciones. `MODEL_TIMEOUT_SECONDS`, `JOB_STALE_SECONDS`, `WORKER_POLL_SECONDS`, `RATE_LIMIT_PER_HOUR` y `CORS_ORIGINS` ajustan los límites operativos.
+Vea `.env.example` para la lista completa. `DATABASE_URL` usa `sqlite:///./local.db` localmente o `postgresql+psycopg://...` para Supabase. `AUTH_TOKENS` contiene tokens opacos separados por comas, distintos por usuario. `MODEL_API_KEY` y `E2B_API_KEY` solo existen en el servidor. `MODEL_BASE_URL` debe admitir Chat Completions y `response_format=json_object`; `MODEL_NAME` selecciona el modelo. `MAX_CODER_ATTEMPTS=3` significa implementación inicial y hasta dos correcciones. `MODEL_API_RETRIES` contabiliza aparte reintentos por red, timeout y 429/5xx. `MAX_JOB_RECOVERIES`, `MAX_CONCURRENT_RUNS`, `MAX_QUEUED_RUNS_PER_OWNER`, `RATE_LIMIT_PER_HOUR` y `JOB_STALE_SECONDS` limitan uso y recuperación. `CORS_ORIGINS` solo necesita el origen del módulo si el frontend y la API se sirven juntos.
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-  UI[Chat web] --> API[FastAPI]
-  API --> DB[(PostgreSQL o SQLite local)]
-  DB --> Worker[Worker de cola persistente]
+  UI[Chat web y Flappy Bird] --> API[FastAPI]
+  API --> DB[(Supabase PostgreSQL; SQLite local)]
+  DB --> Worker[Worker respaldado por PostgreSQL]
   Worker --> Planner
   Planner -->|pregunta| Answer[Respuesta]
+  Planner -->|aclaración| Clarify[Aclaración pendiente]
   Planner -->|ticket| Coder
-  Coder --> Reviewer
+  Coder --> Validator[Validador E2B opcional]
+  Validator --> Reviewer
   Reviewer -->|rechazo y quedan intentos| Coder
   Reviewer -->|aprobado| Approved[Aprobado]
   Reviewer -->|sin intentos| Exhausted[Agotado]
@@ -38,12 +40,15 @@ flowchart LR
   Coder -->|error| Failed
   Reviewer -->|error| Failed
   Answer --> DB
+  Clarify --> DB
   Approved --> DB
   Exhausted --> DB
   Failed --> DB
 ```
 
-El worker lee trabajos `queued`, los marca `running` en PostgreSQL bajo un bloqueo de conversación y recupera `running` cuya última señal supere `JOB_STALE_SECONDS`. Un solo worker es el modo local con SQLite. Los archivos aprobados previos forman el contexto de cambios posteriores. Una pregunta puede salir de Planner como `answered` sin invocar Coder. Se guarda cada salida y versión de archivo, incluidos los intentos rechazados. No se solicita razonamiento privado.
+El worker reclama trabajos bajo un bloqueo transaccional de PostgreSQL, limita ejecuciones simultáneas y serializa los cambios de cada conversación. Renueva la señal de vida durante llamadas largas; tras `JOB_STALE_SECONDS` recupera un trabajo hasta `MAX_JOB_RECOVERIES` veces. Un lease impide que un worker antiguo persista resultados. Es una cola de entrega al menos una vez, con control de duplicados, no una promesa de ejecución exactamente una vez. SQLite se usa con un único proceso local. Los archivos aprobados previos forman el contexto de cambios posteriores; las propuestas rechazadas y su feedback permanecen en las trazas. Una pregunta sale como `answered`; una ambigüedad bloqueante se guarda como `needs_clarification`. No se solicita razonamiento privado.
+
+Si `E2B_API_KEY` está configurada, las propuestas con Python se escriben en un sandbox desechable sin acceso a Internet ni variables de la aplicación. Se ejecuta `compileall` y, si hay archivos `test*.py`, `unittest discover`; stdout y stderr se truncan. El sandbox se cierra al terminar. Los proyectos sin Python quedan `not_executed` en esta primera versión; no se presenta una comprobación vacía como exitosa. `validation_status` (`passed`, `failed`, `error` o `not_executed`) es independiente de la decisión del Reviewer. Los archivos HTML aprobados pueden verse en un iframe sin `allow-same-origin`, con CSP que bloquea recursos externos y conexiones. El código generado nunca se sirve como página privilegiada del origen de la API.
 
 ## Pruebas
 
@@ -51,16 +56,22 @@ El worker lee trabajos `queued`, los marca `running` en PostgreSQL bajo un bloqu
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Las pruebas usan un proveedor simulado. Cubren aprobación, corrección, agotamiento, fallos, seguimiento, preguntas, separación de acceso y recuperación. **No validan calidad con un modelo real.** Para una prueba real, configure `MODEL_API_KEY` y `MODEL_NAME`, arranque la API, envíe un ticket pequeño, consulte `/api/runs/{id}` hasta el estado final y revise `/traces` y `/files`. Compruebe manualmente la calidad de los archivos; no los ejecute en este servidor.
+Las pruebas usan un proveedor de modelo simulado y un sandbox E2B simulado; no crean recursos externos. Cubren aprobación, corrección, agotamiento, fallos, seguimiento, aclaraciones, autorización, límites y recuperación. **No validan calidad con un modelo real ni ejecución en E2B real.** Para una integración real, configure las claves en variables del servicio, arranque la API, envíe un ticket pequeño, consulte `/api/runs/{id}` hasta un estado terminal y revise `/traces` y `/files`. Revise manualmente la calidad del código y el estado de validación.
 
 ## Railway
 
-1. Cree una base Supabase/PostgreSQL y aplique `migrations/001_initial.sql`.
-2. Cree un servicio Railway desde este repositorio con el Dockerfile.
-3. Configure `DATABASE_URL`, `AUTH_TOKENS`, `MODEL_API_KEY`, `MODEL_NAME`, `CORS_ORIGINS` y los límites deseados como variables privadas. Railway suministra `PORT`.
-4. Configure una sola réplica inicialmente y pruebe un ticket real antes de aumentar capacidad. El worker va en el mismo contenedor y usa la base como cola.
+1. Cree una base Supabase/PostgreSQL propia para el módulo. Revise y aplique manualmente `migrations/001_initial.sql` y después `migrations/002_sandbox_and_recovery.sql` en esa base; no apuntar a un proyecto existente sin autorización específica. Las migraciones son aditivas.
+2. Cree un servicio Railway Hobby desde este repositorio privado, rama `main`. Railway detecta el `Dockerfile` de la raíz. Configure una réplica y el healthcheck HTTP `/health` en Railway. El Dockerfile escucha en `0.0.0.0:$PORT`.
+3. Configure en **Variables** del servicio: `DATABASE_URL`, `AUTH_TOKENS`, `MODEL_API_KEY`, `MODEL_NAME`, `MODEL_BASE_URL` si difiere del predeterminado y `E2B_API_KEY` si se desea ejecución aislada. Ajuste `CORS_ORIGINS` al origen público definitivo y los límites de `.env.example`. La imagen fija `APP_ENV=production` y exige PostgreSQL, autenticación y clave del modelo al arrancar. No copie secretos al repositorio ni al frontend.
+4. Pruebe primero el dominio temporal de Railway: `/health`, creación de conversación, ticket real, trazas, validación y Flappy Bird. El mismo contenedor sirve FastAPI y `app/static`; para sustituir la interfaz, coloque el build del diseñador (`index.html` y `assets/`) en `app/static` antes de construir la imagen. Las rutas `/api`, `/health` y `/flappy` permanecen reservadas.
 
-El Dockerfile empaqueta el servicio; **no aísla código generado**. No se despliega ni contrata ningún servicio en este entregable.
+El worker está dentro del mismo servicio: no hace falta un proceso Railway adicional. Más réplicas aumentan consumo; el bloqueo de PostgreSQL y `MAX_CONCURRENT_RUNS` coordinan reclamos. El cierre espera hasta `SHUTDOWN_GRACE_SECONDS` al trabajo activo; si termina abruptamente, el lease y la recuperación acotada gestionan el trabajo interrumpido. El Dockerfile solo empaqueta la aplicación; el aislamiento de código lo aporta E2B. No se realizó ningún despliegue ni contratación.
+
+## Cartografunk y dominio
+
+El módulo es independiente de [Cartografunk](https://cartografunk.com/). `agentes.cartografunk.com` es una propuesta, **no un subdominio configurado**. Cuando se apruebe: añada ese dominio al servicio Railway en Public Networking, copie exactamente los registros CNAME y TXT que Railway muestre al proveedor DNS, espere verificación y certificado HTTPS automático, y configure `CORS_ORIGINS` con el origen HTTPS definitivo. Después, agregue en la web principal un enlace hacia ese subdominio. No se cambió el sitio actual ni DNS. [Railway exige CNAME y TXT y emite HTTPS automáticamente](https://docs.railway.com/networking/domains/working-with-domains).
+
+Si se exige `www.cartografunk.com/agentes`, el hosting actual de la web principal debe permitir un **proxy inverso por ruta** hacia Railway: reescritura de `/agentes/*`, preservación de método y cabeceras, soporte de WebSocket si se añade en el futuro, TLS de extremo a extremo y ajuste de rutas de assets, API y cookies para el prefijo. Hay que confirmar primero el proveedor y configuración de ese hosting. Esta variante no está implementada. La identidad visual final seguirá el diseño pendiente del diseñador; la interfaz incluida es provisional y reemplazable.
 
 ## Documentos
 

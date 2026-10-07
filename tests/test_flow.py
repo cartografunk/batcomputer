@@ -85,6 +85,7 @@ def test_rejection_correction_approval(store, config):
     assert fake.calls[3][1]["review_feedback"] == ["Fix output"]
     with store() as db:
         assert [f.attempt for f in db.scalars(select(FileVersion).order_by(FileVersion.attempt)).all()] == [1, 2]
+        assert latest_files(db, run.conversation_id) == revised["files"]
 
 
 def test_exhaustion(store, config):
@@ -173,8 +174,8 @@ def test_http_async_round_trip(store, config, monkeypatch):
                 break
             time.sleep(0.05)
         assert result["status"] == "approved"
-        assert result["execution"] == "not_executed"
-        assert len(client.get(f"/api/runs/{run_id}/traces", headers=headers).json()) == 3
+        assert result["validation_status"] == "not_executed"
+        assert len(client.get(f"/api/runs/{run_id}/traces", headers=headers).json()) == 4
         assert client.get(f"/api/runs/{run_id}/files", headers=headers).json()[0]["content"] == "print('v1')"
 
 
@@ -243,3 +244,81 @@ def test_provider_retries_persist_separately(store, config):
     run = execute(store, config, run_id, RetriedProvider([PLAN, CODE, YES]))
     assert run.attempts == 1
     assert run.api_retries == 3
+
+
+def test_clarification_persists_until_followup(store, config):
+    conversation, first = queued(store, content="Build a map")
+    clarification = {"kind": "clarification", "summary": "Missing projection", "steps": [],
+                     "answer": "Which coordinate system should I use?"}
+    run = execute(store, config, first, FakeProvider([clarification]))
+    assert run.status == "needs_clarification"
+    with store() as db:
+        assert db.get(Conversation, conversation).pending_clarification == clarification["answer"]
+    _, second = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")), content="Use WGS84")
+    fake = FakeProvider([PLAN, CODE, YES])
+    run = execute(store, config, second, fake)
+    assert run.status == "approved"
+    assert fake.calls[0][1]["pending_clarification"] == clarification["answer"]
+    with store() as db:
+        assert db.get(Conversation, conversation).pending_clarification is None
+
+
+def test_recovery_limit_marks_technical_error(store, config):
+    config.max_job_recoveries = 0
+    _, run_id = queued(store)
+    with store() as db:
+        _, lease = claim_next(db, config)
+        run = db.get(Run, run_id)
+        run.heartbeat_at = now() - timedelta(seconds=config.job_stale_seconds + 1)
+        db.commit()
+    with store() as db:
+        assert claim_next(db, config) is None
+        run = db.get(Run, run_id)
+        assert run.status == "technical_error"
+        assert run.lease_id is None
+
+
+def test_global_concurrency_limit(store, config):
+    config.max_concurrent_runs = 1
+    _, first = queued(store, "alice")
+    _, second = queued(store, "bob")
+    with store() as db:
+        assert claim_next(db, config)[0] == first
+    with store() as db:
+        assert claim_next(db, config) is None
+        assert db.get(Run, second).status == "queued"
+
+
+def test_validation_error_is_separate_from_review(store, config):
+    class BrokenInfrastructure:
+        def validate(self, _files):
+            return {"status": "error", "summary": "Sandbox unavailable", "checks": [], "duration_ms": 4}
+
+    _, run_id = queued(store)
+    with store() as db:
+        _, lease = claim_next(db, config)
+    process_run(store, run_id, config, FakeProvider([PLAN, CODE, YES]), lease, BrokenInfrastructure())
+    with store() as db:
+        run = db.get(Run, run_id)
+        assert run.status == "approved"
+        assert run.validation_status == "error"
+
+
+def test_health_and_provisional_pages(store, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main, "SessionLocal", store)
+    client = TestClient(main.app)
+    assert client.get("/health").json() == {"status": "ok"}
+    assert "Flappy Bird" in client.get("/flappy").text
+    page = client.get("/").text
+    assert 'sandbox="allow-scripts"' in page
+    assert "allow-same-origin" not in page
+    assert "connect-src 'none'" in page
+
+
+def test_production_refuses_sqlite(monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.settings, "app_env", "production")
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        with TestClient(main.app):
+            pass

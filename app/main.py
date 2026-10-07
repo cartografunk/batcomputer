@@ -1,39 +1,63 @@
 import asyncio
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import Base, Conversation, FileVersion, Message, Run, SessionLocal, Trace, engine, now
-from .service import claim_next, latest_files, owned_conversation, owned_run, owner_hash, process_run, public_run
+from .service import claim_next, owned_conversation, owned_run, owner_hash, process_run, public_run
+
+logger = logging.getLogger(__name__)
 
 
 async def worker_loop():
-    while True:
-        try:
-            with SessionLocal() as db:
-                claimed = claim_next(db, settings)
-            if claimed:
-                run_id, lease_id = claimed
-                await asyncio.to_thread(process_run, SessionLocal, run_id, settings, lease_id=lease_id)
-            else:
+    active = None
+    try:
+        while True:
+            try:
+                with SessionLocal() as db:
+                    claimed = claim_next(db, settings)
+                if claimed:
+                    run_id, lease_id = claimed
+                    active = asyncio.create_task(asyncio.to_thread(process_run, SessionLocal, run_id, settings, lease_id=lease_id))
+                    await asyncio.shield(active)
+                    active = None
+                else:
+                    await asyncio.sleep(settings.worker_poll_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # No exception text: SDK/DB errors can contain credentials or URLs.
+                logger.error("worker failure: %s", type(exc).__name__)
                 await asyncio.sleep(settings.worker_poll_seconds)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Database outages remain queued/running; stale jobs are reclaimed after recovery.
-            await asyncio.sleep(settings.worker_poll_seconds)
+    except asyncio.CancelledError:
+        if active is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(active), timeout=settings.shutdown_grace_seconds)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        raise
 
 
 @asynccontextmanager
 async def lifespan(_app):
+    if settings.app_env == "production":
+        if not settings.database_url.startswith("postgresql+psycopg://"):
+            raise RuntimeError("Production requires PostgreSQL DATABASE_URL")
+        if not settings.auth_tokens.strip() or not settings.model_api_key.strip():
+            raise RuntimeError("Production requires AUTH_TOKENS and MODEL_API_KEY")
+        if not (Path(settings.frontend_dir) / "index.html").is_file():
+            raise RuntimeError("Production requires a frontend index.html")
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
     task = asyncio.create_task(worker_loop())
@@ -50,6 +74,9 @@ async def lifespan(_app):
 app = FastAPI(title="Ticket to Code Agents", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()],
                    allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+frontend = Path(settings.frontend_dir).resolve()
+if (frontend / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="frontend-assets")
 
 
 def db_session():
@@ -71,12 +98,21 @@ class MessageIn(BaseModel):
 
 @app.get("/")
 def home():
-    return FileResponse("app/static/index.html")
+    return FileResponse(frontend / "index.html")
 
 
 @app.get("/flappy")
 def flappy():
-    return FileResponse("app/static/flappy.html")
+    return FileResponse(Path(__file__).parent / "static" / "flappy.html")
+
+
+@app.get("/health")
+def health(db: Session = Depends(db_session)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
 
 
 @app.post("/api/conversations", status_code=201)
@@ -94,6 +130,7 @@ def get_conversation(conversation_id: str, owner: str = Depends(auth), db: Sessi
         raise HTTPException(404, "Conversación no encontrada")
     messages = db.scalars(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at, Message.id)).all()
     return {"id": conversation.id, "created_at": conversation.created_at,
+            "pending_clarification": conversation.pending_clarification,
             "messages": [{"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at} for m in messages]}
 
 
@@ -105,6 +142,10 @@ def send_message(conversation_id: str, body: MessageIn, owner: str = Depends(aut
     count = db.scalar(select(func.count(Run.id)).join(Conversation).where(Conversation.owner_hash == owner, Run.created_at >= since))
     if count >= settings.rate_limit_per_hour:
         raise HTTPException(429, "Límite de uso por hora alcanzado")
+    in_flight = db.scalar(select(func.count(Run.id)).join(Conversation).where(
+        Conversation.owner_hash == owner, Run.status.in_(["queued", "running"])))
+    if in_flight >= settings.max_queued_runs_per_owner:
+        raise HTTPException(429, "Demasiados trabajos pendientes")
     message = Message(conversation_id=conversation_id, role="user", content=body.content)
     db.add(message)
     db.flush()

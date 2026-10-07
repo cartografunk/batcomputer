@@ -24,6 +24,7 @@ class Conversation(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     owner_hash: Mapped[str] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    pending_clarification: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Message(Base):
@@ -44,6 +45,8 @@ class Run(Base):
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     api_retries: Mapped[int] = mapped_column(Integer, default=0)
+    recovery_count: Mapped[int] = mapped_column(Integer, default=0)
+    validation_status: Mapped[str] = mapped_column(String(24), default="not_executed")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -63,6 +66,15 @@ class Review(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
     attempt: Mapped[int] = mapped_column(Integer)
+    content: Mapped[dict] = mapped_column(JSON)
+
+
+class Validation(Base):
+    __tablename__ = "validations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24))
     content: Mapped[dict] = mapped_column(JSON)
 
 
