@@ -109,6 +109,12 @@ def make_engine(url: str):
         @event.listens_for(engine, "connect")
         def _fk(connection, _):
             connection.execute("PRAGMA foreign_keys=ON")
+    elif url.startswith("postgresql"):
+        @event.listens_for(engine, "connect")
+        def _schema(connection, _):
+            with connection.cursor() as cursor:
+                cursor.execute("SET SESSION search_path TO batcomputer")
+            connection.commit()
     return engine
 
 
