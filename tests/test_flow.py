@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.agents import AgentFailure, ModelProvider
+from app.agents import AgentFailure, ModelProvider, TavilyResearcher, build_graph
 from app.config import Settings
 from app.db import Base, Conversation, FileVersion, Message, Review, Run, Trace, make_engine, now
 from app.service import claim_next, latest_files, owner_hash, process_run
@@ -234,6 +234,146 @@ def test_model_timeout_counts_api_retries(monkeypatch):
     with pytest.raises(AgentFailure, match="agotó los reintentos"):
         provider.call("planner", {"message": "Hello"})
     assert provider.last_retries == 2
+
+
+def test_research_is_requested_once_and_grounded():
+    config = Settings(tavily_api_key="test-only")
+    first = {"kind": "code", "summary": "Check current API", "steps": [],
+             "research_query": "current library API"}
+    final = {"kind": "code", "summary": "Use documented API", "steps": ["Build"],
+             "research_query": "search again"}
+    fake = FakeProvider([first, final, CODE, YES])
+
+    class FakeResearcher:
+        calls = []
+
+        def search(self, query):
+            self.calls.append(query)
+            return [{"title": "Docs", "url": "https://example.com/docs", "content": "API details"}]
+
+    researcher = FakeResearcher()
+    traces = []
+    class Validator:
+        def validate(self, _files):
+            return {"status": "not_executed", "summary": "No sandbox", "checks": [], "duration_ms": 0}
+
+    graph = build_graph(fake, config, lambda *args: traces.append(args), Validator(), researcher)
+    result = graph.invoke({"message": "Build against the latest API", "history": [], "previous_files": []})
+    assert result["status"] == "approved"
+    assert researcher.calls == ["current library API"]
+    assert fake.calls[1][1]["research_results"][0]["url"] == "https://example.com/docs"
+    assert [trace[0] for trace in traces] == ["planner", "research", "planner", "coder", "validator", "reviewer"]
+
+
+def test_research_can_answer_a_current_question():
+    config = Settings(tavily_api_key="test-only")
+    fake = FakeProvider([
+        {"kind": "question", "summary": "Need current docs", "research_query": "latest API docs"},
+        {"kind": "question", "summary": "Found docs", "answer": "See https://example.com/docs"},
+    ])
+    class FakeResearcher:
+        def search(self, _query):
+            return [{"title": "Docs", "url": "https://example.com/docs", "content": "latest"}]
+    class Validator:
+        def validate(self, _files):
+            raise AssertionError("question should not generate code")
+    graph = build_graph(fake, config, lambda *_: None, Validator(), FakeResearcher())
+    result = graph.invoke({"message": "What is current?", "history": [], "previous_files": []})
+    assert result["status"] == "answered"
+    assert result["result"] == "See https://example.com/docs"
+
+
+def test_tavily_bounds_results_and_uses_bearer(monkeypatch):
+    import app.agents as agents
+
+    seen = {}
+    class SearchClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            return httpx.Response(200, json={"results": [
+                {"title": "Docs", "url": "https://example.com", "content": "x" * 3000},
+                {"title": "Unsafe", "url": "file:///private", "content": "skip"},
+            ]}, request=httpx.Request("POST", url))
+
+    import httpx
+    monkeypatch.setattr(agents.httpx, "Client", SearchClient)
+    config = Settings(tavily_api_key="test-only", tavily_max_results=20)
+    results = TavilyResearcher(config).search("what changed")
+    assert seen["url"] == "https://api.tavily.com/search"
+    assert seen["headers"]["Authorization"] == "Bearer test-only"
+    assert seen["json"]["max_results"] == 5
+    assert len(results) == 1
+    assert len(results[0]["content"]) == 1500
+
+
+def test_gemini_compatible_endpoint_configuration(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    seen = {}
+    class ChatClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            return httpx.Response(200, json={"choices": [{"message": {"content":
+                '{"kind":"question","summary":"ok","answer":"ok"}'}}]},
+                request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ChatClient)
+    provider = ModelProvider(Settings(model_api_key="test-only", model_name="gemini-3.8-flash",
+        model_base_url="https://generativelanguage.googleapis.com/v1beta/openai/"))
+    assert provider.call("planner", {"message": "Hello"})["kind"] == "question"
+    assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert seen["json"]["model"] == "gemini-3.8-flash"
+
+
+def test_gemini_reviewer_can_use_separate_key(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    calls = []
+    class ChatClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]},
+                                  request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ChatClient)
+    config = Settings(model_api_key="openai-test", gemini_api_key="gemini-test",
+                      gemini_roles="reviewer")
+    provider = ModelProvider(config)
+    provider.call("planner", {})
+    provider.call("reviewer", {})
+    assert calls[0][0] == "https://api.openai.com/v1/chat/completions"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer openai-test"
+    assert calls[1][0] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert calls[1][1]["headers"]["Authorization"] == "Bearer gemini-test"
 
 
 def test_provider_retries_persist_separately(store, config):
