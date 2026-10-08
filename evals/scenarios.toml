@@ -1,0 +1,156 @@
+# Batería de evaluación de Batcomputer.
+#
+# Cada [[scenario]] es una conversación nueva. Los turnos se envían en orden; las
+# expectativas se evalúan sobre el ÚLTIMO turno. Campos:
+#
+#   id, title           Identificador estable (no lo cambie: enlaza resultados en LangSmith) y título.
+#   turns               Mensajes del usuario, en orden.
+#   expected_status     Estados finales aceptables: approved, answered, needs_clarification,
+#                       exhausted, technical_error, paused.
+#   expected_route      (opcional) NEW_TICKET, MODIFICATION o QUESTION según el Router.
+#   expect_files        (opcional) true = debe entregar código; false = no debe generar archivos.
+#   file_patterns       (opcional) Expresiones regulares que deben aparecer en algún archivo entregado.
+#   check_previous_work (opcional) true = el Coder debe recibir los archivos del turno anterior.
+#   seed                (opcional) Historial sembrado antes de los turnos (ver evals/seeds.py).
+#   failure             (opcional) Fallo inducido: "auth" (clave inválida) o "timeout".
+#   judge               (opcional, default true) Si el juez LLM califica este escenario.
+#   rubric              Qué debe verificar el juez. Escriba criterios observables.
+
+[[scenario]]
+id = "S1-cupones"
+title = "Ticket base del enunciado"
+turns = [
+  "Agregar validación de cupones de descuento al carrito de compras: el cupón debe existir, no estar expirado y no exceder el monto del carrito.",
+]
+expected_status = ["approved"]
+expected_route = "NEW_TICKET"
+expect_files = true
+file_patterns = ["(?i)expir", "(?i)(coupon|cup[oó]n)"]
+rubric = """
+Cumple si el código entregado:
+1. Rechaza un cupón inexistente.
+2. Rechaza un cupón expirado y define con claridad qué pasa el día exacto de expiración.
+3. Rechaza un cupón cuyo descuento excede el total del carrito (o lo limita, si lo documenta).
+4. Devuelve errores o mensajes distinguibles para cada caso.
+Suma a favor que incluya pruebas automatizadas de los tres casos. Penaliza funcionalidad inventada que contradiga el ticket.
+"""
+
+[[scenario]]
+id = "S2-seguimiento"
+title = "Iteración sobre lo entregado"
+turns = [
+  "Agregar validación de cupones de descuento al carrito de compras: el cupón debe existir, no estar expirado y no exceder el monto del carrito.",
+  "Agrégale también que cada cupón se pueda usar una sola vez por usuario.",
+]
+expected_status = ["approved"]
+expected_route = "MODIFICATION"
+expect_files = true
+check_previous_work = true
+file_patterns = ["(?i)expir", "(?i)(user|usuario)"]
+rubric = """
+Cumple si el código final:
+1. Impide que un mismo usuario use dos veces el mismo cupón y registra el uso.
+2. Conserva las tres validaciones originales (existencia, expiración, monto del carrito).
+3. Es una modificación del código anterior, no una reescritura sin relación.
+"""
+
+[[scenario]]
+id = "S3-pregunta"
+title = "Pregunta sobre lo entregado"
+turns = [
+  "Agregar validación de cupones de descuento al carrito de compras: el cupón debe existir, no estar expirado y no exceder el monto del carrito.",
+  "¿Qué pasa si el carrito está vacío?",
+]
+expected_status = ["answered"]
+expected_route = "QUESTION"
+expect_files = false
+rubric = """
+Cumple si la respuesta explica qué hace el código ya entregado con un carrito vacío (total cero),
+basándose en ese código y sin inventar comportamiento. Si el código no lo contempla, debe decirlo.
+No debe generar código nuevo.
+"""
+
+[[scenario]]
+id = "S4-ambiguo"
+title = "Ticket ambiguo"
+turns = ["Mejora la seguridad del login."]
+expected_status = ["needs_clarification", "approved"]
+rubric = """
+Cumple si hace UNA de estas dos cosas:
+a) Pide una aclaración concreta (qué amenaza, qué stack, qué login existe).
+b) Implementa algo razonable y declara explícitamente los supuestos que tomó.
+No cumple si implementa asumiendo en silencio un stack o un login inexistente.
+"""
+
+[[scenario]]
+id = "S5-imposible"
+title = "Requisito imposible"
+turns = ["Implementa una función que ordene n números arbitrarios en tiempo O(1) y sin memoria adicional."]
+expected_status = ["needs_clarification", "exhausted", "answered"]
+rubric = """
+Cumple si reconoce que ordenar n elementos arbitrarios en O(1) es imposible y lo comunica
+(pidiendo aclaración, o agotando intentos con ese motivo). No cumple si presenta como aprobado
+un código que afirma lograrlo.
+"""
+
+[[scenario]]
+id = "S6-tras-agotamiento"
+title = "Corrección después de agotar intentos"
+seed = "exhausted_coupon"
+turns = ["Arréglalo."]
+expected_status = ["approved"]
+expected_route = "MODIFICATION"
+expect_files = true
+check_previous_work = true
+file_patterns = ["(?i)expir"]
+rubric = """
+El turno anterior terminó sin aprobación; el revisor señaló dos defectos: la expiración está invertida
+y no se valida que el descuento no exceda el carrito. Cumple si el código final corrige ambos defectos,
+conserva la validación de existencia y parte del código anterior.
+"""
+
+[[scenario]]
+id = "S7-flappy"
+title = "Flappy Bird desde el chat"
+turns = ["Crea un Flappy Bird jugable en un solo archivo HTML."]
+expected_status = ["approved"]
+expect_files = true
+file_patterns = ["(?i)<canvas", "requestAnimationFrame|setInterval", "(?i)(score|puntaje|puntos)"]
+rubric = """
+Cumple si, leyendo el código, el juego sería jugable: gravedad, salto con tecla o clic, tubos que
+avanzan con hueco, detección de colisión, puntaje y reinicio. Todo en un archivo HTML sin recursos externos.
+"""
+
+[[scenario]]
+id = "S8-api-tareas"
+title = "Ticket de otro dominio"
+turns = [
+  "Crea un endpoint REST para registrar tareas con título, prioridad (alta, media o baja) y fecha límite. Rechaza fechas límite en el pasado y prioridades inválidas.",
+]
+expected_status = ["approved"]
+expect_files = true
+file_patterns = ["(?i)post", "(?i)(prioridad|priority)"]
+rubric = """
+Cumple si expone un endpoint para crear tareas con los tres campos, rechaza fechas pasadas y
+prioridades fuera de alta/media/baja con un error claro (p. ej. 400/422), y documenta cómo ejecutarlo.
+"""
+
+[[scenario]]
+id = "S9a-fallo-autenticacion"
+title = "Clave del modelo inválida"
+failure = "auth"
+judge = false
+turns = ["Agregar validación de cupones de descuento al carrito de compras."]
+expected_status = ["technical_error"]
+expect_files = false
+rubric = ""
+
+[[scenario]]
+id = "S9b-fallo-timeout"
+title = "Timeout del proveedor"
+failure = "timeout"
+judge = false
+turns = ["Agregar validación de cupones de descuento al carrito de compras."]
+expected_status = ["paused"]
+expect_files = false
+rubric = ""

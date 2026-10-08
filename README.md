@@ -81,6 +81,10 @@ Documenter redacta un `README.md` con criterios y resultado de validación despu
 
 Las pruebas usan un proveedor de modelo simulado y un sandbox E2B simulado; no crean recursos externos. Cubren rutas, criterios, aprobación, corrección, rechazo por sintaxis, agotamiento, SSE, pausa, autorización, límites y recuperación. **No validan calidad con un modelo real ni ejecución en E2B real.** Para una integración real, configure las claves en variables del servicio, arranque la API, envíe un ticket pequeño, consulte `/api/runs/{id}` hasta un estado terminal y revise trazas, archivos y vista previa. Revise manualmente la calidad del código y el estado de validación.
 
+## Evaluación con modelo real y trazas
+
+`python -m evals` corre una batería de 10 escenarios (ticket base, seguimiento, pregunta, ambigüedad, requisito imposible, corrección tras agotar intentos, Flappy Bird, otro dominio y dos fallos inducidos) con el modelo configurado, y reporta estado, ruta, uso del trabajo previo, intentos, validación, tokens, costo y un juez LLM opcional. Con `--langsmith` sube la batería como dataset y experimento. `MODEL_BACKEND=langchain` activa trazas por agente en LangSmith y modelos distintos por rol (`ROLE_MODELS`). Vea [Evaluación y trazas](docs/EVALS.md).
+
 ## Railway
 
 1. En el proyecto Supabase `cartografunk` autorizado para compartir la instancia, aplique `migrations/001_initial.sql`, `migrations/002_sandbox_and_recovery.sql` y `migrations/20261007194652_batcomputer_app_role.sql`, en ese orden. Ya se aplicaron mediante el conector a ese proyecto. Las migraciones crean únicamente el esquema `batcomputer`, sus tablas y el rol `batcomputer_app`; no alteran tablas de la web principal. Son aditivas.
@@ -89,18 +93,18 @@ Las pruebas usan un proveedor de modelo simulado y un sandbox E2B simulado; no c
 4. Configure en **Variables** del servicio: `DATABASE_URL`, `LANGGRAPH_SQLITE_PATH` con una ruta absoluta dentro del volumen, `AUTH_TOKENS`, `MODEL_API_KEY` y, para el endpoint recibido, `MODEL_MODE=azure_responses`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION` y `AZURE_OPENAI_DEPLOYMENT`. Use `MODEL_NAME` y `MODEL_BASE_URL` solo para proveedores compatibles directos. Configure `GEMINI_API_KEY` y `GEMINI_ROLES` si se usará el modo mixto, `TAVILY_API_KEY` si se desea búsqueda y `E2B_API_KEY` si se desea ejecución aislada. Ajuste `CORS_ORIGINS` al origen público definitivo y los límites de `.env.example`. La imagen fija `APP_ENV=production` y exige PostgreSQL, autenticación, clave del modelo remoto y ruta absoluta de checkpoints al arrancar. No copie secretos al repositorio ni al frontend.
 5. Pruebe primero el dominio temporal de Railway: `/health`, creación de conversación, ticket real, trazas, validación y Flappy Bird. El mismo contenedor sirve FastAPI y `app/static`; para sustituir la interfaz, coloque el build del diseñador (`index.html` y `assets/`) en `app/static` antes de construir la imagen. Las rutas `/api`, `/health` y `/flappy` permanecen reservadas.
 
-El worker está dentro del mismo servicio: no hace falta un proceso Railway adicional. El cierre espera hasta `SHUTDOWN_GRACE_SECONDS` al trabajo activo; si termina abruptamente, el lease y la recuperación acotada gestionan el trabajo interrumpido. El Dockerfile solo empaqueta la aplicación; el aislamiento de código lo aporta E2B. No se realizó ningún despliegue ni contratación.
+El worker está dentro del mismo servicio: no hace falta un proceso Railway adicional. El cierre espera hasta `SHUTDOWN_GRACE_SECONDS` al trabajo activo; si termina abruptamente, el lease y la recuperación acotada gestionan el trabajo interrumpido. El Dockerfile solo empaqueta la aplicación; el aislamiento de código lo aporta E2B. La aplicación está desplegada en Railway con una réplica, healthcheck `/health`, volumen `/data` y sesiones en el esquema `batcomputer` de Supabase.
 
 ## Cartografunk y dominio
 
 | Repositorio | Función | Hosting previsto |
 |---|---|---|
-| `cartografunk/cartografunk_web` | Sitio existente en `www.cartografunk.com` | Hosting actual, sin cambios |
+| `cartografunk/cartografunk_web` | Sitio existente en `www.cartografunk.com` | Cloudflare Pages |
 | `cartografunk/batcomputer` | Frontend, FastAPI, LangGraph, pruebas y documentación | Servicio independiente en Railway |
 
-La dirección propuesta para la aplicación es `batcomputer.cartografunk.com`; **no está configurada**. El enlace llamado **Batcomputer** está preparado en una rama de trabajo independiente de `cartografunk/cartografunk_web` y no debe publicarse hasta que el subdominio funcione. La aplicación ya ofrece un enlace de regreso a `www.cartografunk.com`. No se modificaron DNS ni se publicó un despliegue. La identidad visual final seguirá el diseño que entregue el diseñador; la interfaz incluida es provisional y reemplazable.
+La aplicación está disponible en `https://batcomputer.cartografunk.com/`, mediante un dominio personalizado de Railway y registros DNS en Cloudflare. La aplicación ofrece un enlace de regreso a `www.cartografunk.com`. La identidad visual final seguirá el diseño que entregue el diseñador; la interfaz incluida es provisional y reemplazable.
 
-Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para los pasos exactos de Railway, verificación y HTTPS. Los nombres y valores de los registros se copiarán de Railway cuando se configure el dominio; este repositorio no los inventa. La alternativa bajo una ruta de `www.cartografunk.com` queda fuera de esta arquitectura y necesitaría confirmar primero el proxy del hosting actual.
+Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para la configuración aplicada y las verificaciones. La alternativa bajo una ruta de `www.cartografunk.com` queda fuera de esta arquitectura y necesitaría confirmar primero el proxy del hosting actual.
 
 ## Documentos
 
@@ -109,3 +113,4 @@ Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para los pasos exactos de
 - [Decisiones y límites](docs/DECISIONS.md)
 - [Dominio personalizado y DNS](docs/DOMAIN.md)
 - [Criterios de aceptación de la prueba](docs/ACCEPTANCE.md)
+- [Evaluación y trazas](docs/EVALS.md)

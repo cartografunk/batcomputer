@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     model_name: str = "gpt-4.1-mini"
     router_model_name: str = ""
     model_mode: Literal["remote", "azure", "azure_responses", "ollama"] = "remote"
+    # "http" conserva el cliente original; "langchain" usa app/lc_provider.py
+    # (tokens por llamada, trazas LangSmith por agente y modelos distintos por rol).
+    model_backend: Literal["http", "langchain"] = "http"
+    # Solo backend langchain. Formato: "router=openai:gpt-5-mini,reviewer=anthropic:claude-sonnet-5-5".
+    # Los roles sin entrada usan MODEL_MODE/MODEL_NAME como hasta ahora.
+    role_models: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    openrouter_api_key: str = ""
+    max_output_tokens: int = Field(default=16384, ge=1)
     azure_openai_endpoint: str = ""
     azure_openai_api_version: str = "2025-04-01-preview"
     azure_openai_deployment: str = ""
@@ -42,6 +52,13 @@ class Settings(BaseSettings):
     sandbox_output_chars: int = 4000
     frontend_dir: str = "app/static"
     shutdown_grace_seconds: int = 10
+    # Observabilidad con LangSmith (desactivada por defecto; ver docs/EVALS.md).
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "batcomputer"
+    langsmith_endpoint: str = ""
+    # Modelo juez de la batería de evaluación, "proveedor:modelo". Vacío = sin juez.
+    judge_model: str = ""
 
 
 settings = Settings()

@@ -17,6 +17,10 @@ dependencies = [
   "tenacity==9.2.1",
   "pydantic-settings==2.15.0",
   "e2b==2.53.1",
+  "langchain-core==1.6.8",
+  "langchain-openai==1.7.0",
+  "langchain-anthropic==1.7.5",
+  "langsmith==0.14.4",
 ]
 
 [project.optional-dependencies]
@@ -30,3 +34,4 @@ app = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

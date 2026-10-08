@@ -8,9 +8,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from .agents import AgentFailure, ModelProvider, TemporaryProviderFailure, build_graph
+from .agents import AgentFailure, TemporaryProviderFailure, build_graph
 from .config import Settings
 from .db import Conversation, FileVersion, Message, Plan, Review, Run, Trace, Validation, now, uid
+from .lc_provider import make_provider
+from .observability import configure_tracing, graph_config
 from .sandbox import E2BValidator
 from .state import WorkflowState
 
@@ -91,7 +93,7 @@ class LeaseLost(Exception):
 
 
 def process_run(session_factory, run_id: str, settings: Settings, provider=None, lease_id=None, validator=None):
-    provider = provider or ModelProvider(settings)
+    provider = provider or make_provider(settings)
     validator = validator or E2BValidator(settings)
     heartbeat_stop = threading.Event()
 
@@ -160,12 +162,14 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
             payload = {"message": message.content,
                        "history": [{"role": m.role, "content": m.content[:4000]} for m in history[-12:]],
                        "previous_files": previous, "pending_clarification": pending}
+            conversation_id = run.conversation_id
         checkpoint_path = Path(settings.langgraph_sqlite_path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        configure_tracing(settings)
         with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
             graph = build_graph(provider, settings, record, validator, checkpointer=checkpointer)
             result = graph.invoke(WorkflowState.model_validate(payload).model_dump(),
-                                  {"configurable": {"thread_id": run_id}})
+                                  graph_config(settings, run_id, conversation_id, provider))
         with session_factory() as db:
             run = db.get(Run, run_id)
             check_lease(run)
