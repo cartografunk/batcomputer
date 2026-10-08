@@ -10,9 +10,9 @@ Este documento resume con palabras propias el enunciado facilitado para la prueb
 | Una respuesta final por turno y trazas aparte en vivo | Chat, `/stream/{session_id}` por SSE y endpoints de trazas y archivos | Verificado localmente |
 | Timeouts, JSON malformado y errores comprensibles | Tenacity, checkpoint SQLite, estados `paused` y `technical_error` | Verificado con proveedor simulado |
 | Clave del modelo fuera del repositorio | `MODEL_API_KEY` únicamente en variables del servidor | Implementado; revisar variables de Railway antes del despliegue |
-| Aplicación pública de una sola página y disponible el día de la entrevista | Dockerfile, `/health`, frontend servido por FastAPI, guía de Railway | **Pendiente:** desplegar, entregar URL y supervisar disponibilidad |
+| Aplicación pública de una sola página y disponible el día de la entrevista | [batcomputer.cartografunk.com](https://batcomputer.cartografunk.com/), Dockerfile, `/health`, frontend servido por FastAPI | Desplegado; volver a comprobar disponibilidad el día de la entrevista |
 | Repositorio con instalación, variables, arquitectura y resumen | `README.md`, `docs/API.md`, `docs/DECISIONS.md` | Implementado |
-| Flappy Bird jugable | Página `/flappy`; el chat acepta entregas HTML5 y las muestra en iframe restringido | Implementado; falta comprobar generación real del juego |
+| Flappy Bird jugable | Página independiente `/flappy`, implementada en el repositorio; el chat acepta entregas HTML5 y las muestra en iframe restringido | Entregable independiente implementado; generación por agentes pendiente de comprobación real con `S7-flappy` |
 
 ## Prueba manual antes de la entrevista
 
@@ -21,4 +21,4 @@ Este documento resume con palabras propias el enunciado facilitado para la prueb
 3. Probar otro ticket de complejidad similar no usado en el desarrollo. Revisar la respuesta final, archivos, validación, trazas y comportamiento ante rechazo o error.
 4. Confirmar que la URL pública, el chat y `/health` responden durante la entrevista. Probar Flappy Bird y el enlace de regreso a Cartografunk.
 
-La URL del sistema y su disponibilidad son entregables del enunciado. Permanecen pendientes porque el despliegue no está autorizado todavía.
+La URL del sistema está publicada. La disponibilidad debe comprobarse de nuevo el día de la entrevista.
