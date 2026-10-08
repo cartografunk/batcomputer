@@ -1,16 +1,74 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Batcomputer · Cartografunk</title><style>
-body{font:16px system-ui,sans-serif;margin:0;background:#f5f7fa;color:#18212b}header{padding:1rem 2rem;background:#15263a;color:white;display:flex;justify-content:space-between}header a{color:white}main{max-width:1200px;margin:2rem auto;display:grid;grid-template-columns:2fr 1fr;gap:1rem;padding:0 1rem}section,aside{background:white;border:1px solid #dae0e7;border-radius:12px;padding:1.25rem}#messages{height:55vh;overflow:auto}.bubble{padding:.75rem 1rem;margin:.5rem 0;border-radius:10px;white-space:pre-wrap}.user{background:#e4f0ff;margin-left:12%}.assistant{background:#eef1f3;margin-right:12%}form{display:flex;gap:.5rem;margin-top:1rem}textarea{flex:1;min-height:70px}button,input,textarea,select{font:inherit;padding:.5rem}button{cursor:pointer}aside pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem;max-height:260px;overflow:auto}#status{font-weight:600}#preview{width:100%;height:320px;border:1px solid #dae0e7;background:white}#preview[hidden],#retry[hidden]{display:none}details{margin-bottom:1rem}summary{cursor:pointer;font-weight:600}#traces{list-style:none;padding:0;max-height:280px;overflow:auto}#traces li{border-left:3px solid #6e92ad;padding:.4rem .7rem;margin:.4rem 0;background:#f4f7fa}#file-picker{max-width:100%;width:100%}@media(max-width:750px){main{display:block}aside{margin-top:1rem}}
-</style></head><body><header><strong>Cartografunk · Batcomputer</strong><nav><a href="https://www.cartografunk.com/">Volver a Cartografunk</a> · <a href="/flappy">Flappy Bird provisional</a></nav></header>
-<main><section><label>Token de acceso <input type="password" id="token" placeholder="AUTH_TOKENS"></label> <button id="new">Nueva conversación</button>
-<p id="conversation"></p><div id="messages" aria-live="polite"></div><p id="status"></p><button id="retry" hidden>Reintentar trabajo pausado</button>
-<form id="send"><textarea id="content" required placeholder="Describe tu ticket o pregunta por el código entregado"></textarea><button>Enviar</button></form></section>
-<aside><details open><summary>Trazas de agentes</summary><p>Progreso en tiempo real. El chat muestra solo la respuesta final.</p><ol id="traces" aria-live="polite"></ol></details><h2>Código entregado</h2><select id="file-picker" aria-label="Archivo generado"><option>Sin archivos</option></select><pre id="files"></pre><h2>Vista previa restringida</h2><p id="preview-note">Disponible para HTML aprobado.</p><iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe></aside></main>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080810">
+  <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
+  <title>Batcomputer · Cartografunk</title>
+  <link rel="stylesheet" href="/assets/batcomputer.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="https://www.cartografunk.com/" aria-label="Cartografunk, volver al sitio principal">CARTOGRAFUNK</a>
+    <nav class="header-links" aria-label="Navegación de Batcomputer">
+      <a href="/flappy">Flappy Bird</a>
+      <a href="https://www.cartografunk.com/">Volver a Cartografunk ↗</a>
+    </nav>
+  </header>
+  <main class="shell">
+    <div class="intro">
+      <p class="eyebrow">Cartografunk / Laboratorio multiagente</p>
+      <h1>BAT<em>computer</em></h1>
+      <p class="intro-copy">De una idea a código funcional. Describe un ticket, sigue el trabajo de los agentes y explora el resultado aquí mismo.</p>
+    </div>
+    <div class="workspace">
+      <section class="panel chat-panel" aria-labelledby="chat-heading">
+        <div class="panel-head">
+          <div><p class="panel-kicker">01 / Conversación</p><h2 id="chat-heading">Mesa de trabajo</h2></div>
+          <span class="connection-state">Sistema multiagente</span>
+        </div>
+        <div class="access-bar">
+          <div class="token-field"><label for="token">Token de acceso</label><input type="password" id="token" placeholder="Pega tu token privado" autocomplete="off" spellcheck="false"></div>
+          <button class="button button-outline" id="new" type="button">Nueva conversación</button>
+        </div>
+        <p id="conversation"></p>
+        <div id="messages" aria-live="polite">
+          <div class="empty-state" id="empty-state">
+            <p class="section-label">Tu punto de partida</p>
+            <h3>¿Qué vamos a <em>construir</em> hoy?</h3>
+            <p>Escribe un ticket de desarrollo o pregunta por una entrega anterior. Batcomputer planifica, genera, valida y revisa el código antes de mostrártelo.</p>
+            <div class="suggestions" aria-label="Ejemplos de solicitudes"><span>Crear una interfaz</span><span>Modificar una entrega</span><span>Revisar el código</span></div>
+          </div>
+        </div>
+        <div class="compose">
+          <p id="status" role="status" aria-live="polite"></p>
+          <button class="button button-outline" id="retry" type="button" hidden>Reintentar trabajo pausado</button>
+          <form id="send"><textarea id="content" required placeholder="Describe tu ticket o pregunta por el código entregado" aria-label="Mensaje para Batcomputer"></textarea><button class="button button-primary" type="submit">Enviar ↗</button></form>
+        </div>
+      </section>
+      <aside class="sidebar" aria-label="Resultados y actividad">
+        <section class="panel side-section trace-panel">
+          <p class="panel-kicker">02 / Proceso</p>
+          <details open><summary>Trazas de agentes</summary><p>Sigue el progreso en tiempo real. La respuesta final aparece en el chat.</p><ol id="traces" aria-live="polite"></ol></details>
+        </section>
+        <section class="panel side-section artifact-panel">
+          <p class="panel-kicker">03 / Entrega</p>
+          <h2>Código generado</h2>
+          <select id="file-picker" aria-label="Archivo generado"><option>Sin archivos</option></select>
+          <pre id="files"></pre>
+          <h2>Vista previa</h2>
+          <p id="preview-note">Disponible cuando se aprueba una entrega HTML.</p>
+          <iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
+        </section>
+      </aside>
+    </div>
+    <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
+  </main>
 <script>
-const token=document.querySelector('#token'), messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry');let conversationId=null,lastRunId=null,streamController=null;
+const token=document.querySelector('#token'), messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true);let conversationId=null,lastRunId=null,streamController=null;
 const api=async(path,options={})=>{let r=await fetch(path,{...options,headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok)throw Error((await r.json()).detail||r.statusText);return r.json()};
-function bubble(role,content){let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
+function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{headers:{Authorization:'Bearer '+token.value},signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
@@ -27,7 +85,7 @@ function showPreview(files,run){
   preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   preview.hidden=false;previewNote.textContent='Iframe aislado: scripts locales permitidos; recursos externos bloqueados.';
 }
-document.querySelector('#new').onclick=async()=>{try{let c=await api('/api/conversations',{method:'POST'});conversationId=c.id;streamController?.abort();messages.replaceChildren();preview.hidden=true;preview.srcdoc='';retryButton.hidden=true;document.querySelector('#conversation').textContent='Conversación: '+c.id;status.textContent='';document.querySelector('#traces').replaceChildren();showFiles([])}catch(e){status.textContent=e.message}};
+document.querySelector('#new').onclick=async()=>{try{let c=await api('/api/conversations',{method:'POST'});conversationId=c.id;streamController?.abort();messages.replaceChildren(emptyTemplate.cloneNode(true));preview.hidden=true;preview.srcdoc='';retryButton.hidden=true;document.querySelector('#conversation').textContent='Conversación: '+c.id;status.textContent='';document.querySelector('#traces').replaceChildren();showFiles([])}catch(e){status.textContent=e.message}};
 async function watchRun(runId){lastRunId=runId;retryButton.hidden=true;streamTraces(conversationId,runId);while(true){await new Promise(resolve=>setTimeout(resolve,900));const result=await api('/api/runs/'+runId);if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
 retryButton.onclick=async()=>{try{const run=await api('/api/runs/'+lastRunId+'/retry',{method:'POST'});await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
 document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content)return;try{if(!conversationId)await document.querySelector('#new').onclick();if(!conversationId)return;const run=await api('/api/conversations/'+conversationId+'/messages',{method:'POST',body:JSON.stringify({content})});bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();status.textContent='En cola…';await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
