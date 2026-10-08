@@ -107,7 +107,7 @@ class MessageIn(BaseModel):
 
 @app.get("/")
 def home():
-    return FileResponse(frontend / "index.html")
+    return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/flappy")
