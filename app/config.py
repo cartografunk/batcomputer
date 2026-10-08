@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4.1-mini"
     router_model_name: str = ""
-    model_mode: Literal["remote", "ollama"] = "remote"
+    model_mode: Literal["remote", "azure", "ollama"] = "remote"
+    azure_openai_endpoint: str = ""
+    azure_openai_api_version: str = "2024-12-01-preview"
+    azure_openai_deployment: str = ""
+    azure_max_completion_tokens: int = Field(default=16384, ge=1)
     ollama_base_url: str = "http://127.0.0.1:11434/v1"
     ollama_model_name: str = "deepseek-coder"
     gemini_api_key: str = ""

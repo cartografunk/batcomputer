@@ -1,6 +1,7 @@
 import json
 import time
 from typing import TypedDict
+from urllib.parse import quote
 
 import httpx
 from langgraph.graph import END, StateGraph
@@ -40,6 +41,7 @@ class ModelProvider:
         if use_gemini and not self.settings.gemini_api_key:
             raise AgentFailure("Gemini no configurado. Configure GEMINI_API_KEY en el servidor.")
         use_ollama = self.settings.model_mode == "ollama" and not use_gemini
+        use_azure = self.settings.model_mode == "azure" and not use_gemini
         api_key = (self.settings.gemini_api_key if use_gemini else
                    "ollama" if use_ollama else self.settings.model_api_key)
         base_url = ("https://generativelanguage.googleapis.com/v1beta/openai/" if use_gemini else
@@ -50,6 +52,21 @@ class ModelProvider:
             model_name = self.settings.router_model_name
         if not api_key:
             raise AgentFailure("Modelo no configurado. Configure MODEL_API_KEY en el servidor.")
+        if use_azure:
+            endpoint = self.settings.azure_openai_endpoint.strip().rstrip("/")
+            if (not endpoint.startswith("https://") or not self.settings.azure_openai_deployment.strip() or
+                    not self.settings.azure_openai_api_version.strip()):
+                raise AgentFailure("Azure OpenAI no configurado. Configure endpoint, deployment y versión de API.")
+            deployment = (self.settings.router_model_name.strip() if role == "router" and
+                          self.settings.router_model_name else self.settings.azure_openai_deployment.strip())
+            model_name = deployment
+            url = endpoint + "/openai/deployments/" + quote(deployment, safe="") + "/chat/completions"
+            headers = {"api-key": api_key}
+            params = {"api-version": self.settings.azure_openai_api_version}
+        else:
+            url = base_url.rstrip("/") + "/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}"}
+            params = None
         body = {
             "model": model_name,
             "response_format": {"type": "json_object"},
@@ -58,6 +75,8 @@ class ModelProvider:
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
         }
+        if use_azure:
+            body["max_completion_tokens"] = self.settings.azure_max_completion_tokens
 
         def transient(exc):
             return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)) or (
@@ -75,8 +94,9 @@ class ModelProvider:
                 with attempt:
                     with httpx.Client(timeout=self.settings.model_timeout_seconds) as client:
                         response = client.post(
-                            base_url.rstrip("/") + "/chat/completions",
-                            headers={"Authorization": f"Bearer {api_key}"},
+                            url,
+                            headers=headers,
+                            params=params,
                             json=body,
                         )
                     response.raise_for_status()

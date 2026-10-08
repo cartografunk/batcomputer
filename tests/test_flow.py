@@ -488,6 +488,49 @@ def test_router_can_use_a_smaller_model_with_same_key(monkeypatch):
     assert models == ["some-nano", "gpt-6.1-sol"]
 
 
+def test_azure_openai_uses_deployment_route_and_api_key(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    calls = []
+    class ChatClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]},
+                                  request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ChatClient)
+    provider = ModelProvider(Settings(model_mode="azure", model_api_key="azure-test",
+        azure_openai_endpoint="https://open-ai-exam.openai.azure.com/",
+        azure_openai_deployment="gpt-5-mini", azure_openai_api_version="2024-12-01-preview",
+        router_model_name="gpt-5-nano"))
+    provider.call("planner", {})
+    provider.call("router", {})
+    assert calls[0][0] == "https://open-ai-exam.openai.azure.com/openai/deployments/gpt-5-mini/chat/completions"
+    assert calls[0][1]["headers"] == {"api-key": "azure-test"}
+    assert calls[0][1]["params"] == {"api-version": "2024-12-01-preview"}
+    assert calls[0][1]["json"]["model"] == "gpt-5-mini"
+    assert calls[0][1]["json"]["max_completion_tokens"] == 16384
+    assert calls[1][0].endswith("/deployments/gpt-5-nano/chat/completions")
+    assert calls[1][1]["json"]["model"] == "gpt-5-nano"
+
+
+def test_azure_openai_requires_deployment():
+    provider = ModelProvider(Settings(model_mode="azure", model_api_key="azure-test",
+                                      azure_openai_endpoint="https://example.openai.azure.com/"))
+    with pytest.raises(AgentFailure, match="Azure OpenAI no configurado"):
+        provider.call("planner", {})
+
+
 def test_provider_retries_persist_separately(store, config):
     class RetriedProvider(FakeProvider):
         last_retries = 1

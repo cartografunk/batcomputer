@@ -57,6 +57,12 @@ async def lifespan(_app):
             raise RuntimeError("Production requires PostgreSQL DATABASE_URL")
         if not settings.auth_tokens.strip() or (settings.model_mode != "ollama" and not settings.model_api_key.strip()):
             raise RuntimeError("Production requires AUTH_TOKENS and MODEL_API_KEY")
+        if settings.model_mode == "azure" and (
+            not settings.azure_openai_endpoint.startswith("https://") or
+            not settings.azure_openai_deployment.strip() or
+            not settings.azure_openai_api_version.strip()
+        ):
+            raise RuntimeError("Production requires Azure OpenAI endpoint, deployment and API version")
         if not Path(settings.langgraph_sqlite_path).is_absolute():
             raise RuntimeError("Production requires a persistent absolute LANGGRAPH_SQLITE_PATH")
         if not (Path(settings.frontend_dir) / "index.html").is_file():
