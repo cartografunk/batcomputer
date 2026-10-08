@@ -41,7 +41,8 @@ class ModelProvider:
         if use_gemini and not self.settings.gemini_api_key:
             raise AgentFailure("Gemini no configurado. Configure GEMINI_API_KEY en el servidor.")
         use_ollama = self.settings.model_mode == "ollama" and not use_gemini
-        use_azure = self.settings.model_mode == "azure" and not use_gemini
+        use_azure = self.settings.model_mode in {"azure", "azure_responses"} and not use_gemini
+        use_azure_responses = self.settings.model_mode == "azure_responses" and not use_gemini
         api_key = (self.settings.gemini_api_key if use_gemini else
                    "ollama" if use_ollama else self.settings.model_api_key)
         base_url = ("https://generativelanguage.googleapis.com/v1beta/openai/" if use_gemini else
@@ -60,7 +61,8 @@ class ModelProvider:
             deployment = (self.settings.router_model_name.strip() if role == "router" and
                           self.settings.router_model_name else self.settings.azure_openai_deployment.strip())
             model_name = deployment
-            url = endpoint + "/openai/deployments/" + quote(deployment, safe="") + "/chat/completions"
+            url = (endpoint + "/openai/responses" if use_azure_responses else
+                   endpoint + "/openai/deployments/" + quote(deployment, safe="") + "/chat/completions")
             headers = {"api-key": api_key}
             params = {"api-version": self.settings.azure_openai_api_version}
         else:
@@ -75,7 +77,14 @@ class ModelProvider:
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
         }
-        if use_azure:
+        if use_azure_responses:
+            body = {
+                "model": model_name,
+                "input": body["messages"],
+                "text": {"format": {"type": "json_object"}},
+                "max_output_tokens": self.settings.azure_max_completion_tokens,
+            }
+        elif use_azure:
             body["max_completion_tokens"] = self.settings.azure_max_completion_tokens
 
         def transient(exc):
@@ -100,7 +109,19 @@ class ModelProvider:
                             json=body,
                         )
                     response.raise_for_status()
-                    return json.loads(response.json()["choices"][0]["message"]["content"])
+                    data = response.json()
+                    if use_azure_responses:
+                        if data.get("status") not in (None, "completed"):
+                            raise AgentFailure("Azure OpenAI devolvió una respuesta incompleta.")
+                        output_text = data.get("output_text")
+                        if not output_text:
+                            output_text = "".join(
+                                part.get("text", "")
+                                for item in data.get("output", []) if item.get("type") == "message"
+                                for part in item.get("content", []) if part.get("type") == "output_text"
+                            )
+                        return json.loads(output_text)
+                    return json.loads(data["choices"][0]["message"]["content"])
         except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
             if transient(exc):
                 raise TemporaryProviderFailure("Fallo temporal del proveedor de IA. Tu estado está guardado. Intenta de nuevo.") from exc

@@ -57,7 +57,7 @@ async def lifespan(_app):
             raise RuntimeError("Production requires PostgreSQL DATABASE_URL")
         if not settings.auth_tokens.strip() or (settings.model_mode != "ollama" and not settings.model_api_key.strip()):
             raise RuntimeError("Production requires AUTH_TOKENS and MODEL_API_KEY")
-        if settings.model_mode == "azure" and (
+        if settings.model_mode in {"azure", "azure_responses"} and (
             not settings.azure_openai_endpoint.startswith("https://") or
             not settings.azure_openai_deployment.strip() or
             not settings.azure_openai_api_version.strip()

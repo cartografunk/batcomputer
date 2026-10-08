@@ -531,6 +531,41 @@ def test_azure_openai_requires_deployment():
         provider.call("planner", {})
 
 
+def test_azure_responses_uses_shared_endpoint_and_extracts_output(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    seen = {}
+    class ResponsesClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            data = {"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": '{"kind":"QUESTION","reason":"test"}'}]}]}
+            return httpx.Response(200, json=data, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ResponsesClient)
+    provider = ModelProvider(Settings(model_mode="azure_responses", model_api_key="azure-test",
+        azure_openai_endpoint="https://open-ai-exam.openai.azure.com/",
+        azure_openai_deployment="gpt-5-mini", azure_openai_api_version="2025-04-01-preview"))
+    assert provider.call("router", {"message": "Hello"})["kind"] == "QUESTION"
+    assert seen["url"] == "https://open-ai-exam.openai.azure.com/openai/responses"
+    assert seen["headers"] == {"api-key": "azure-test"}
+    assert seen["params"] == {"api-version": "2025-04-01-preview"}
+    assert seen["json"]["model"] == "gpt-5-mini"
+    assert seen["json"]["text"] == {"format": {"type": "json_object"}}
+    assert seen["json"]["input"][0]["role"] == "system"
+    assert seen["json"]["max_output_tokens"] == 16384
+
+
 def test_provider_retries_persist_separately(store, config):
     class RetriedProvider(FakeProvider):
         last_retries = 1
