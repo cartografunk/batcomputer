@@ -80,5 +80,17 @@ function showPreview(files,run){
 document.querySelector('#new').onclick=async()=>{try{let c=await api('/api/conversations',{method:'POST'});conversationId=c.id;streamController?.abort();messages.replaceChildren(emptyTemplate.cloneNode(true));preview.hidden=true;preview.srcdoc='';retryButton.hidden=true;document.querySelector('#conversation').textContent='Conversación: '+c.id;status.textContent='';document.querySelector('#traces').replaceChildren();showFiles([])}catch(e){status.textContent=e.message}};
 async function watchRun(runId){lastRunId=runId;retryButton.hidden=true;streamTraces(conversationId,runId);while(true){await new Promise(resolve=>setTimeout(resolve,900));const result=await api('/api/runs/'+runId);if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
 retryButton.onclick=async()=>{try{const run=await api('/api/runs/'+lastRunId+'/retry',{method:'POST'});await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
+const composer=document.querySelector('#content');
+composer.addEventListener('keydown',event=>{
+  if(event.key!=='Enter'||event.isComposing||event.keyCode===229)return;
+  if(event.ctrlKey&&!event.altKey&&!event.metaKey){
+    event.preventDefault();
+    composer.setRangeText('\n',composer.selectionStart,composer.selectionEnd,'end');
+    composer.dispatchEvent(new Event('input',{bubbles:true}));
+  }else if(!event.shiftKey&&!event.altKey&&!event.metaKey){
+    event.preventDefault();
+    if(!event.repeat)document.querySelector('#send').requestSubmit();
+  }
+});
 document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content)return;try{if(!conversationId)await document.querySelector('#new').onclick();if(!conversationId)return;const run=await api('/api/conversations/'+conversationId+'/messages',{method:'POST',body:JSON.stringify({content})});bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();status.textContent='En cola…';await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
 </script></body></html>
