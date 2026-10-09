@@ -1,6 +1,6 @@
 # Contrato HTTP de Batcomputer para la interfaz
 
-Todos los endpoints `/api` requieren `Authorization: Bearer <token>`. El token corresponde a una entrada de `AUTH_TOKENS`; los recursos de otro token devuelven 404. JSON UTF-8. `401` indica token ausente o inválido, `429` indica límite por hora, `422` indica entrada inválida. Los UUID identifican recursos pero no autorizan acceso.
+`GET /api/session` crea o recupera una sesión anónima mediante cookie `HttpOnly`, `SameSite=Lax` y `Secure` en producción. El frontend usa esa cookie automáticamente para `/api` y `/stream`; no solicita token. Los clientes anteriores pueden seguir usando `Authorization: Bearer <token>` con una entrada de `AUTH_TOKENS`. Los recursos de otra sesión o token devuelven 404. JSON UTF-8. `401` indica sesión ausente o credencial inválida, `429` indica límite de uso, `422` indica entrada inválida. Los UUID identifican recursos pero no autorizan acceso.
 
 | Método | Ruta | Respuesta |
 |---|---|---|

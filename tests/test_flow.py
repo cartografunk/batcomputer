@@ -156,6 +156,29 @@ def test_sse_streams_agent_events_and_enforces_owner(store, config, monkeypatch)
     assert '"node": "Documenter"' in response.text
 
 
+def test_anonymous_session_owns_conversation_and_respects_global_limit(store, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "test-signing-secret")
+    monkeypatch.setattr(main.settings, "global_rate_limit_per_hour", 1)
+    visitor = TestClient(main.app)
+    session = visitor.get("/api/session")
+    assert session.status_code == 200
+    assert session.headers["cache-control"] == "no-store"
+    assert "httponly" in session.headers["set-cookie"].lower()
+    conversation = visitor.post("/api/conversations")
+    assert conversation.status_code == 201
+    conversation_id = conversation.json()["id"]
+    assert visitor.get(f"/api/conversations/{conversation_id}").status_code == 200
+
+    other = TestClient(main.app)
+    assert other.get(f"/api/conversations/{conversation_id}").status_code == 401
+    other.get("/api/session")
+    assert other.get(f"/api/conversations/{conversation_id}").status_code == 404
+    assert visitor.post(f"/api/conversations/{conversation_id}/messages", json={"content": "Ticket"}).status_code == 202
+    assert visitor.post(f"/api/conversations/{conversation_id}/messages", json={"content": "Otro"}).status_code == 429
+
+
 def test_ollama_mode_needs_no_remote_api_key(monkeypatch):
     import httpx
     import app.agents as agents

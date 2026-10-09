@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -6,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -93,12 +95,31 @@ def db_session():
         yield db
 
 
-def auth(authorization: str = Header(default="")):
+SESSION_COOKIE = "batcomputer_session"
+SESSION_MAX_AGE = 60 * 60 * 24 * 30
+
+
+def cookie_token(value: str | None) -> str | None:
+    if not value or len(value) > 256:
+        return None
+    token, separator, signature = value.rpartition(".")
+    if not separator or not token or not signature:
+        return None
+    expected = hmac.new(settings.auth_tokens.encode(), token.encode(), hashlib.sha256).hexdigest()
+    return token if hmac.compare_digest(signature, expected) else None
+
+
+def auth(request: Request, authorization: str = Header(default="")):
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
-    valid = any(secrets.compare_digest(token, configured.strip()) for configured in settings.auth_tokens.split(",") if configured.strip())
-    if not valid:
-        raise HTTPException(401, "Token de acceso inválido")
-    return owner_hash(token)
+    if authorization:
+        valid = any(secrets.compare_digest(token, configured.strip()) for configured in settings.auth_tokens.split(",") if configured.strip())
+        if not valid:
+            raise HTTPException(401, "Token de acceso inválido")
+        return owner_hash(token)
+    session_token = cookie_token(request.cookies.get(SESSION_COOKIE))
+    if session_token is None:
+        raise HTTPException(401, "Sesión no disponible")
+    return owner_hash(session_token)
 
 
 class MessageIn(BaseModel):
@@ -108,6 +129,18 @@ class MessageIn(BaseModel):
 @app.get("/")
 def home():
     return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/session")
+def ensure_session(request: Request, response: Response):
+    token = cookie_token(request.cookies.get(SESSION_COOKIE))
+    if token is None:
+        token = secrets.token_urlsafe(32)
+        signature = hmac.new(settings.auth_tokens.encode(), token.encode(), hashlib.sha256).hexdigest()
+        response.set_cookie(SESSION_COOKIE, f"{token}.{signature}", max_age=SESSION_MAX_AGE,
+                            httponly=True, secure=settings.app_env == "production", samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "ready"}
 
 
 @app.get("/flappy")
@@ -151,6 +184,9 @@ def send_message(conversation_id: str, body: MessageIn, owner: str = Depends(aut
     count = db.scalar(select(func.count(Run.id)).join(Conversation).where(Conversation.owner_hash == owner, Run.created_at >= since))
     if count >= settings.rate_limit_per_hour:
         raise HTTPException(429, "Límite de uso por hora alcanzado")
+    global_count = db.scalar(select(func.count(Run.id)).where(Run.created_at >= since))
+    if global_count >= settings.global_rate_limit_per_hour:
+        raise HTTPException(429, "Límite global de uso por hora alcanzado")
     in_flight = db.scalar(select(func.count(Run.id)).join(Conversation).where(
         Conversation.owner_hash == owner, Run.status.in_(["queued", "running"])))
     if in_flight >= settings.max_queued_runs_per_owner:

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     job_stale_seconds: int = 180
     worker_poll_seconds: float = 1
     rate_limit_per_hour: int = 30
+    global_rate_limit_per_hour: int = 100
     cors_origins: str = "http://localhost:8000"
     e2b_api_key: str = ""
     sandbox_timeout_seconds: int = 45

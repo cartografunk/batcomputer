@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=1">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=2">
 </head>
 <body>
   <header class="site-header">
@@ -19,25 +19,17 @@
     <div class="intro">
       <p class="eyebrow">Cartografunk / Laboratorio multiagente</p>
       <h1>BAT<em>computer</em></h1>
-      <p class="intro-copy">De una idea a código funcional. Describe un ticket, sigue el trabajo de los agentes y explora el resultado aquí mismo.</p>
     </div>
     <div class="workspace">
       <section class="panel chat-panel" aria-labelledby="chat-heading">
         <div class="panel-head">
           <div><p class="panel-kicker">01 / Conversación</p><h2 id="chat-heading">Mesa de trabajo</h2></div>
-          <span class="connection-state">Sistema multiagente</span>
-        </div>
-        <div class="access-bar">
-          <div class="token-field"><label for="token">Token de acceso</label><input type="password" id="token" placeholder="Pega tu token privado" autocomplete="off" spellcheck="false"></div>
           <button class="button button-outline" id="new" type="button">Nueva conversación</button>
         </div>
         <p id="conversation"></p>
         <div id="messages" aria-live="polite">
           <div class="empty-state" id="empty-state">
-            <p class="section-label">Tu punto de partida</p>
-            <h3>¿Qué vamos a <em>construir</em> hoy?</h3>
-            <p>Escribe un ticket de desarrollo o pregunta por una entrega anterior. Batcomputer planifica, genera, valida y revisa el código antes de mostrártelo.</p>
-            <div class="suggestions" aria-label="Ejemplos de solicitudes"><span>Crear una interfaz</span><span>Modificar una entrega</span><span>Revisar el código</span></div>
+            <h3>Salvemos <em>Ciudad Gótica</em></h3>
           </div>
         </div>
         <div class="compose">
@@ -65,12 +57,13 @@
     <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
   </main>
 <script>
-const token=document.querySelector('#token'), messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true);let conversationId=null,lastRunId=null,streamController=null;
-const api=async(path,options={})=>{let r=await fetch(path,{...options,headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok)throw Error((await r.json()).detail||r.statusText);return r.json()};
+const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true);let conversationId=null,lastRunId=null,streamController=null,sessionReady=null;
+function ensureSession(){if(!sessionReady)sessionReady=fetch('/api/session',{credentials:'same-origin'}).then(response=>{if(!response.ok)throw Error('No se pudo iniciar la sesión');return response.json()}).catch(error=>{sessionReady=null;throw error});return sessionReady}
+const api=async(path,options={})=>{await ensureSession();let r=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok)throw Error((await r.json()).detail||r.statusText);return r.json()};
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
-async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{headers:{Authorization:'Bearer '+token.value},signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
+async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
   preview.hidden=true;preview.srcdoc='';
   if(run.status!=='approved'){previewNote.textContent='La vista previa requiere HTML aprobado.';return}
