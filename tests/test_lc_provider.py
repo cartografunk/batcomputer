@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.agents import PROMPTS, AgentFailure, ModelProvider, TemporaryProviderFailure
 from app.config import Settings as _Settings
 from app.db import Base, Conversation, Message, Run, make_engine
-from app.lc_provider import (LangChainProvider, ModelSpec, default_spec, is_transient, make_provider,
+from app.lc_provider import (LangChainProvider, ModelSpec, azure_output_schema, default_spec, is_transient, make_provider,
                              parse_role_models, resolve_spec)
 from app.observability import configure_tracing, graph_config
 from app.service import claim_next, owner_hash, process_run
@@ -151,9 +151,16 @@ def test_azure_responses_uses_text_format(monkeypatch):
     provider = LangChainProvider(lc_settings(model_mode="azure_responses", azure_openai_endpoint="https://ex.openai.azure.com/",
                                              azure_openai_deployment="dep"))
     assert provider.call("router", {"message": "x"})["kind"] == "NEW_TICKET"
+    assert provider.call("reviewer", {"code": {}})["approved"] is True
     url, body = sent[-1]
     assert url.startswith("https://ex.openai.azure.com/openai/responses")
-    assert body["text"]["format"] == {"type": "json_object"}
+    fmt = body["text"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["strict"] is True
+    schema = fmt["schema"]
+    assert schema["required"] == ["approved", "summary", "feedback"]
+    assert schema["additionalProperties"] is False
+    assert "maxLength" not in json.dumps(schema)
+    assert azure_output_schema("planner")["properties"]["criteria"]["items"]["$ref"] == "#/$defs/AcceptanceCriterion"
 
 
 def test_missing_key_is_explicit():

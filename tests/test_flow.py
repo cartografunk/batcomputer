@@ -83,6 +83,15 @@ def test_initial_approval(store, config):
         assert len(db.scalars(select(FileVersion)).all()) == 2
 
 
+@pytest.mark.parametrize("message", ["2 + 2", "¿Cuánto es 2 + 2?", "Calcula 2+2"])
+def test_bare_arithmetic_uses_question_without_code_pipeline(store, config, message):
+    _, run_id = queued(store, content=message)
+    fake = FakeProvider([{"answer": "4"}])
+    run = execute(store, config, run_id, fake)
+    assert run.status == "answered" and run.result == "4"
+    assert [role for role, _ in fake.calls] == ["question"]
+
+
 def test_rejection_correction_approval(store, config):
     _, run_id = queued(store)
     revised = {"summary": "Fixed", "files": [{"path": "app.py", "content": "print('v2')"}]}

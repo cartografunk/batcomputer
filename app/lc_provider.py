@@ -43,6 +43,30 @@ STRUCTURE_ERROR = "El modelo devolvió una respuesta con estructura inválida."
 TEMPORARY_ERROR = "Fallo temporal del proveedor de IA. Tu estado está guardado. Intenta de nuevo."
 
 
+def azure_output_schema(role: str) -> dict:
+    """Translate our Pydantic contract to Azure's supported strict JSON Schema subset.
+
+    Length limits and custom validators remain enforced locally after parsing.
+    """
+    allowed = {"type", "properties", "required", "items", "anyOf", "$defs", "$ref",
+               "enum", "const", "description", "additionalProperties"}
+
+    def clean(value):
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {key: ({name: clean(schema) for name, schema in item.items()}
+                        if key in ("properties", "$defs") else clean(item))
+                  for key, item in value.items() if key in allowed}
+        if result.get("type") == "object":
+            result["additionalProperties"] = False
+            result["required"] = list(result.get("properties", {}))
+        return result
+
+    return {"title": ROLE_SCHEMAS[role].__name__, **clean(ROLE_SCHEMAS[role].model_json_schema())}
+
+
 @dataclass(frozen=True)
 class ModelSpec:
     provider: str
@@ -121,7 +145,7 @@ def build_chat_model(settings: Settings, spec: ModelSpec):
                                 api_key=_require(settings.model_api_key, "MODEL_API_KEY"),
                                 max_tokens=settings.azure_max_completion_tokens, timeout=timeout, max_retries=0,
                                 use_responses_api=spec.provider == "azure_responses")
-        return model, "json_mode", {}
+        return model, "json_schema", {"strict": True}
 
     from langchain_openai import ChatOpenAI
     if spec.provider == "openai":
@@ -181,7 +205,8 @@ class LangChainProvider:
             except ValueError as exc:
                 raise AgentFailure(str(exc)) from exc
             model, method, extra = self._builder(self.settings, spec)
-            runnable = model.with_structured_output(ROLE_SCHEMAS[role], method=method, include_raw=True, **extra)
+            schema = azure_output_schema(role) if spec.provider in ("azure", "azure_responses") else ROLE_SCHEMAS[role]
+            runnable = model.with_structured_output(schema, method=method, include_raw=True, **extra)
             self._runnables[role] = (runnable, spec.label)
         return self._runnables[role]
 
@@ -227,7 +252,10 @@ class LangChainProvider:
         parsed = result.get("parsed")
         if result.get("parsing_error") is not None or parsed is None:
             raise AgentFailure(STRUCTURE_ERROR)
-        return parsed.model_dump() if isinstance(parsed, BaseModel) else dict(parsed)
+        try:
+            return ROLE_SCHEMAS[role].model_validate(parsed).model_dump()
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise AgentFailure(STRUCTURE_ERROR) from exc
 
 
 def make_provider(settings: Settings):
