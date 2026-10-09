@@ -57,7 +57,7 @@ def by_key(feedback):
 def test_scenarios_file_is_valid_and_complete():
     scenarios = load_scenarios()
     ids = [scenario.id for scenario in scenarios]
-    assert len(ids) == 10 and ids[0] == "S1-cupones"
+    assert len(ids) == 12 and ids[0] == "S1-cupones"
     assert {s.failure for s in scenarios if s.failure} == {"auth", "timeout"}
     assert load_scenarios(only=["S3-pregunta"])[0].expected_route == "QUESTION"
     with pytest.raises(ValueError):
@@ -80,6 +80,9 @@ def test_dry_run_battery_exercises_every_path():
     assert by_key(results["S3-pregunta"]["feedback"])["sin_codigo_nuevo"]["score"] == 1
     assert results["S9a-fallo-autenticacion"]["outputs"]["final"]["status"] == "technical_error"
     assert results["S9b-fallo-timeout"]["outputs"]["final"]["status"] == "paused"
+    assert by_key(results["S10-scout-atribucion"]["feedback"])["scout_esperado"]["score"] == 1
+    assert by_key(results["S10-scout-atribucion"]["feedback"])["atribucion_scout"]["score"] == 1
+    assert by_key(results["S11-juego-original"]["feedback"])["scout_esperado"]["score"] == 1
     for scenario in ("S9a-fallo-autenticacion", "S9b-fallo-timeout"):
         assert by_key(results[scenario]["feedback"])["mensaje_de_error_claro"]["score"] == 1
     # S6 siembra una entrega agotada: la métrica existe y documenta si el Coder recibió ese código.
@@ -169,7 +172,7 @@ class FakeLangSmith:
 
 def test_langsmith_dataset_sync_is_idempotent():
     client, scenarios = FakeLangSmith(), load_scenarios()
-    assert sync_dataset(client, scenarios)[1:] == (10, 0)
+    assert sync_dataset(client, scenarios)[1:] == (12, 0)
     assert sync_dataset(client, scenarios)[1:] == (0, 0)
     changed = [s if s.id != "S4-ambiguo" else type(s)(**{**s.__dict__, "title": "Nuevo título"}) for s in scenarios]
     assert sync_dataset(client, changed)[1:] == (0, 1)
@@ -181,7 +184,7 @@ def test_run_langsmith_glue():
     selected = load_scenarios(only=["S1-cupones", "S9a-fallo-autenticacion"])
     outcome = run_langsmith(all_scenarios, selected, base_settings(), DryRunProvider, None, {}, 1, "prefijo",
                             {"modo": "prueba"}, client=client)
-    assert outcome["experiment"] == "exp-1" and outcome["created"] == 10
+    assert outcome["experiment"] == "exp-1" and outcome["created"] == 12
     assert [row["scenario"] for row in outcome["rows"]] == ["S1-cupones", "S9a-fallo-autenticacion"]
     assert by_key(outcome["rows"][0]["feedback"])["estado_esperado"]["score"] == 1
     assert client.evaluated["experiment_prefix"] == "prefijo" and client.evaluated["max_concurrency"] == 1

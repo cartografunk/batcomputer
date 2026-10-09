@@ -69,6 +69,19 @@ def deterministic_checks(outputs: dict, reference: dict, prices: dict | None = N
         results.append(metric("ruta_esperada", int(final["route"] == reference["expected_route"]),
                               f"Router: {final['route']}. Esperada: {reference['expected_route']}."))
 
+    if reference.get("expected_scout") is not None:
+        expected_scout = reference["expected_scout"]
+        consulted = bool(final.get("scout"))
+        results.append(metric("scout_esperado", int(consulted == expected_scout),
+                              f"Referencias permisivas: {len(final.get('scout') or [])}."))
+        if expected_scout and consulted:
+            readme = next((item["content"] for item in final["files"]
+                           if item["path"] == "README.md"), "")
+            attributed = all(item["url"] in readme and item["license"] in readme
+                             for item in final["scout"])
+            results.append(metric("atribucion_scout", int(attributed),
+                                  "Fuentes y licencias en README." if attributed else "Falta atribución."))
+
     code_files = [item for item in final["files"] if item["path"] != "README.md"]
     paths = ", ".join(item["path"] for item in code_files) or "ninguno"
     if reference.get("expect_files") is True:

@@ -97,7 +97,8 @@ class LeaseLost(Exception):
     pass
 
 
-def process_run(session_factory, run_id: str, settings: Settings, provider=None, lease_id=None, validator=None):
+def process_run(session_factory, run_id: str, settings: Settings, provider=None, lease_id=None, validator=None,
+                scout=None):
     provider = provider or make_provider(settings)
     validator = validator or E2BValidator(settings)
     heartbeat_stop = threading.Event()
@@ -172,7 +173,7 @@ def process_run(session_factory, run_id: str, settings: Settings, provider=None,
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         configure_tracing(settings)
         with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
-            graph = build_graph(provider, settings, record, validator, checkpointer=checkpointer)
+            graph = build_graph(provider, settings, record, validator, checkpointer=checkpointer, scout=scout)
             result = graph.invoke(WorkflowState.model_validate(payload).model_dump(),
                                   graph_config(settings, run_id, conversation_id, provider))
         with session_factory() as db:

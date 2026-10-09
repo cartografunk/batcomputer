@@ -399,6 +399,74 @@ def test_question_uses_dedicated_node():
     assert result["result"] == "See the existing files."
 
 
+def test_current_question_searches_once_and_shows_sources():
+    config = Settings(tavily_api_key="test-only")
+    class Provider:
+        def call(self, role, payload):
+            if role == "router":
+                assert payload["web_available"]
+                return {"kind": "QUESTION", "reason": "Current fact", "search_query": "latest release"}
+            assert role == "question"
+            assert payload["research_results"][0]["url"] == "https://example.com/release"
+            return {"answer": "La versión nueva está documentada."}
+    class Researcher:
+        calls = []
+        def search(self, query):
+            self.calls.append(query)
+            return [{"title": "Release", "url": "https://example.com/release", "content": "Notes"}]
+    class Validator:
+        def validate(self, _files):
+            raise AssertionError("question should not generate code")
+    researcher = Researcher()
+    traces = []
+    graph = build_graph(Provider(), config, lambda *args: traces.append(args), Validator(), researcher)
+    result = graph.invoke({"message": "Busca la versión más reciente", "history": [], "previous_files": []})
+    assert result["status"] == "answered"
+    assert researcher.calls == ["latest release"]
+    assert "https://example.com/release" in result["result"]
+    assert [trace[0] for trace in traces] == ["router", "research", "question"]
+
+
+def test_scout_reference_reaches_coder_and_readme():
+    config = Settings(scout_enabled=True)
+    plan = {**PLAN, "scout_query": "python pagination example"}
+    fake = FakeProvider([plan, CODE, YES])
+    class Scout:
+        calls = []
+        def search(self, query):
+            self.calls.append(query)
+            return [{"repository": "example/repo", "url": "https://github.com/example/repo",
+                     "license": "MIT", "files": [{"path": "main.py", "content": "print('reference')"}]}]
+    class Validator:
+        def validate(self, _files):
+            return {"status": "not_executed", "summary": "No sandbox", "checks": [], "duration_ms": 0}
+    scout = Scout()
+    traces = []
+    graph = build_graph(fake, config, lambda *args: traces.append(args), Validator(), scout=scout)
+    result = graph.invoke({"message": "Build pagination", "history": [], "previous_files": []})
+    assert result["status"] == "approved"
+    assert scout.calls == ["python pagination example"]
+    assert fake.calls[2][1]["scout_references"][0]["license"] == "MIT"
+    assert "https://github.com/example/repo" in result["readme"]
+    assert [trace[0] for trace in traces] == ["router", "planner", "scout", "coder",
+                                                 "validator", "reviewer", "documenter"]
+
+
+def test_game_cannot_invoke_scout_even_if_planner_requests_it():
+    config = Settings(scout_enabled=True)
+    fake = FakeProvider([{**PLAN, "scout_query": "flappy bird"}, CODE, YES])
+    class Scout:
+        def search(self, _query):
+            raise AssertionError("game must be generated without Scout")
+    class Validator:
+        def validate(self, _files):
+            return {"status": "not_executed", "summary": "No sandbox", "checks": [], "duration_ms": 0}
+    graph = build_graph(fake, config, lambda *_: None, Validator(), scout=Scout())
+    result = graph.invoke({"message": "Crea un juego Flappy Bird", "history": [], "previous_files": []})
+    assert result["status"] == "approved"
+    assert not result.get("scout_references")
+
+
 def test_tavily_bounds_results_and_uses_bearer(monkeypatch):
     import app.agents as agents
 

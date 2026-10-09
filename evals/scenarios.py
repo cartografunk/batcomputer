@@ -21,6 +21,7 @@ class Scenario:
     expect_files: bool | None = None
     file_patterns: list[str] = field(default_factory=list)
     check_previous_work: bool = False
+    expected_scout: bool | None = None
     seed: str | None = None
     failure: str | None = None
     judge: bool = True
@@ -30,7 +31,7 @@ class Scenario:
         data = {"expected_status": list(self.expected_status), "rubric": self.rubric.strip(),
                 "file_patterns": list(self.file_patterns), "check_previous_work": self.check_previous_work,
                 "judge": self.judge}
-        for key in ("expected_route", "expect_files", "seed", "failure"):
+        for key in ("expected_route", "expect_files", "expected_scout", "seed", "failure"):
             value = getattr(self, key)
             if value is not None:
                 data[key] = value

@@ -116,6 +116,11 @@ def collect_turn(store, run_id: str, message: str, elapsed: float, usage: dict) 
                         for t in traces if t.stage == "reviewer" and not t.error],
             "validations": [{"attempt": t.attempt, "status": t.output.get("status"), "summary": t.output.get("summary")}
                             for t in traces if t.stage == "validator"],
+            "scout": [{"repository": item.get("repository"), "url": item.get("url"),
+                       "license": item.get("license")}
+                      for t in traces if t.stage == "scout" and not t.error
+                      for item in t.output.get("references", [])],
+            "scout_invoked": any(t.stage == "scout" for t in traces),
             "errors": [{"stage": t.stage, "attempt": t.attempt, "error": t.error} for t in traces if t.error],
             "files": _cap_files(files),
             "duration_s": round(elapsed, 2),
@@ -147,7 +152,7 @@ def run_scenario(scenario: Scenario, base_settings: Settings, provider_factory=m
             if not claimed or claimed[0] != run_id:
                 raise RuntimeError(f"El worker no reclamó el run del escenario {scenario.id}.")
             before, started = _usage(provider), time.monotonic()
-            process_run(store, run_id, settings, provider, claimed[1])
+            process_run(store, run_id, settings, provider, claimed[1], scout=getattr(provider, "scout", None))
             turns.append(collect_turn(store, run_id, message, time.monotonic() - started,
                                       _usage_delta(before, _usage(provider))))
         return {"scenario_id": scenario.id, "backend": settings.model_backend,

@@ -45,7 +45,9 @@ Gemini puede usarse de dos formas. Para ejecutar **todo** el pipeline con Gemini
 
 Si Iram solo ofrece un modelo nano, confirme el identificador exacto y úselo primero para probar conexión, Router y salida JSON. Para evaluar calidad de código, asigne `GEMINI_ROLES=planner,coder,reviewer,question` con una **clave de Gemini API** y deje el nano como modelo `MODEL_NAME` del Router; sin esa segunda clave, el nano ejecutaría todo el flujo y el resultado no sería una evaluación representativa del Coder. No fije un identificador antiguo sin revisar su fecha de retiro. [Modelos y retiros de OpenAI](https://developers.openai.com/api/docs/deprecations).
 
-`TAVILY_API_KEY` habilita investigación opcional. El Planner pide **una sola búsqueda** cuando necesita documentación o hechos externos actuales; el grafo guarda consulta, fuentes y resultado en trazas, vuelve a planificar y pasa las fuentes al Coder y Reviewer. La búsqueda usa profundidad `basic`, máximo configurable de 1 a 5 resultados (`TAVILY_MAX_RESULTS`, predeterminado 3), timeout propio y extractos truncados. Si Tavily falla, el trabajo sigue sin resultados; el Planner no debe inventar hechos actuales. Las páginas encontradas son datos no confiables, no instrucciones para los agentes. Sin clave, no hay búsquedas ni gasto de Tavily. [API Tavily Search](https://docs.tavily.com/documentation/api-reference/endpoint/search).
+`TAVILY_API_KEY` habilita investigación opcional. El Planner pide **una sola búsqueda** cuando necesita documentación o hechos externos actuales; el grafo guarda consulta, fuentes y resultado en trazas, vuelve a planificar y pasa las fuentes al Coder y Reviewer. El Router también puede pedir una búsqueda para una pregunta sobre hechos actuales; Question recibe los resultados y la respuesta muestra las fuentes consultadas. La búsqueda usa profundidad `basic`, máximo configurable de 1 a 5 resultados (`TAVILY_MAX_RESULTS`, predeterminado 3), timeout propio y extractos truncados. Si Tavily falla, el trabajo sigue sin resultados; los agentes no deben inventar hechos actuales. Las páginas encontradas son datos no confiables, no instrucciones para los agentes. Sin clave, no hay búsquedas ni gasto de Tavily. [API Tavily Search](https://docs.tavily.com/documentation/api-reference/endpoint/search).
+
+`SCOUT_ENABLED=true` permite que el Planner solicite una referencia de GitHub cuando ayuda a un ticket de código. Scout consulta repositorios públicos, acepta solo licencias `MIT`, `Apache-2.0`, `BSD-2-Clause` o `BSD-3-Clause`, lee hasta dos archivos pequeños y pasa extractos limitados al Coder y Reviewer. El Coder debe crear su propia implementación; el README de la entrega cita el repositorio y la licencia consultada. No se usa Scout para juegos cuya generación original forma parte de la prueba. Si GitHub limita o falla la búsqueda, el ticket continúa sin referencia. La licencia del repositorio se comprueba mediante metadatos de GitHub y se descartan archivos con una cabecera SPDX conflictiva; revise licencias de archivos antes de redistribuir código adaptado. [Búsqueda de repositorios](https://docs.github.com/en/rest/search/search#search-repositories), [contenido de repositorios](https://docs.github.com/en/rest/repos/contents#get-repository-content).
 
 `MODEL_MODE=ollama` usa `OLLAMA_BASE_URL` y `OLLAMA_MODEL_NAME` en lugar de `MODEL_*` para los roles que no estén asignados a Gemini. Puede probar con `deepseek-coder` si está instalado en Ollama, pero no se ha verificado su cumplimiento del contrato JSON. `127.0.0.1` funciona solo cuando Ollama y FastAPI corren en el mismo host; en Railway habría que configurar una URL alcanzable desde el contenedor. [Compatibilidad Ollama](https://docs.ollama.com/api/openai-compatibility).
 
@@ -59,10 +61,14 @@ flowchart LR
   DB --> Worker[Worker respaldado por PostgreSQL]
   Worker --> Router
   Router -->|pregunta| Answer[Respuesta]
+  Router -->|pregunta actual y Tavily configurado| QuestionResearch[Tavily]
+  QuestionResearch --> Answer
   Router -->|ticket o modificación| Planner
   Planner -->|aclaración| Clarify[Aclaración pendiente]
   Planner -->|requiere información externa y Tavily configurado| Research[Tavily]
   Research --> Planner
+  Planner -->|referencia útil| Scout[GitHub Scout]
+  Scout --> Coder
   Planner -->|ticket| Coder
   Coder --> Tester[Tester sintáctico; E2B opcional]
   Tester --> Reviewer
@@ -94,7 +100,7 @@ Las pruebas usan un proveedor de modelo simulado y un sandbox E2B simulado; no c
 
 ## Evaluación con modelo real y trazas
 
-`python -m evals` corre una batería de 10 escenarios (ticket base, seguimiento, pregunta, ambigüedad, requisito imposible, corrección tras agotar intentos, Flappy Bird, otro dominio y dos fallos inducidos) con el modelo configurado, y reporta estado, ruta, uso del trabajo previo, intentos, validación, tokens, costo y un juez LLM opcional. Con `--langsmith` sube la batería como dataset y experimento. `MODEL_BACKEND=langchain` activa trazas por agente en LangSmith y modelos distintos por rol (`ROLE_MODELS`). Vea [Evaluación y trazas](docs/EVALS.md).
+`python -m evals` corre una batería de 12 escenarios (tickets, seguimiento, preguntas, límites, Flappy Bird, dos fallos inducidos y dos casos de Scout) con el modelo configurado, y reporta estado, ruta, uso del trabajo previo, Scout, atribución, intentos, validación, tokens, costo y un juez LLM opcional. Con `--langsmith` sube la batería como dataset y experimento. `MODEL_BACKEND=langchain` activa trazas por agente en LangSmith y modelos distintos por rol (`ROLE_MODELS`). Vea [Evaluación y trazas](docs/EVALS.md).
 
 ## Railway
 

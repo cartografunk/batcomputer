@@ -11,6 +11,7 @@
 #   expect_files        (opcional) true = debe entregar código; false = no debe generar archivos.
 #   file_patterns       (opcional) Expresiones regulares que deben aparecer en algún archivo entregado.
 #   check_previous_work (opcional) true = el Coder debe recibir los archivos del turno anterior.
+#   expected_scout      (opcional) true = referencia permisiva con atribución; false = sin Scout.
 #   seed                (opcional) Historial sembrado antes de los turnos (ver evals/seeds.py).
 #   failure             (opcional) Fallo inducido: "auth" (clave inválida) o "timeout".
 #   judge               (opcional, default true) Si el juez LLM califica este escenario.
@@ -154,3 +155,30 @@ turns = ["Agregar validación de cupones de descuento al carrito de compras."]
 expected_status = ["paused"]
 expect_files = false
 rubric = ""
+
+[[scenario]]
+id = "S10-scout-atribucion"
+title = "Scout consulta una referencia permisiva"
+turns = ["Busca una referencia permisiva en GitHub y crea un paginador de resultados en Python. Adapta la idea a estos criterios: entrada de lista y tamaño de página positivo, salida de la página solicitada y error claro si el índice es inválido. Atribuye la fuente consultada."]
+expected_status = ["approved"]
+expected_route = "NEW_TICKET"
+expected_scout = true
+expect_files = true
+rubric = """
+Cumple si el Planner pide Scout, el Coder recibe la referencia y entrega una implementación propia
+que satisface los criterios. El README identifica la fuente y su licencia permisiva.
+"""
+
+[[scenario]]
+id = "S11-juego-original"
+title = "Juego original sin referencia externa"
+turns = ["Crea un juego original de memoria de cartas en un solo archivo HTML, sin consultar implementaciones externas. Incluye contador de movimientos, parejas encontradas y reinicio."]
+expected_status = ["approved"]
+expected_route = "NEW_TICKET"
+expected_scout = false
+expect_files = true
+file_patterns = ["(?i)<html", "(?i)(movimientos|moves)"]
+rubric = """
+Cumple si genera un juego propio, jugable y sin referencia de Scout: cartas que se voltean,
+parejas que permanecen visibles, contador de movimientos y reinicio.
+"""

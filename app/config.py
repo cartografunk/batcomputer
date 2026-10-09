@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     tavily_max_results: int = 3
     tavily_timeout_seconds: float = 10
+    scout_enabled: bool = True
+    scout_timeout_seconds: float = 8
     max_coder_attempts: int = Field(default=3, ge=1, le=3)
     max_job_recoveries: int = 2
     max_concurrent_runs: int = 2

@@ -17,6 +17,7 @@ class StrictModel(BaseModel):
 class RouteOutput(StrictModel):
     kind: Literal["NEW_TICKET", "MODIFICATION", "QUESTION"]
     reason: str = Field(min_length=1, max_length=500)
+    search_query: str | None = Field(default=None, max_length=300)
 
 
 class AcceptanceCriterion(StrictModel):
@@ -30,6 +31,7 @@ class PlanOutput(StrictModel):
     criteria: list[AcceptanceCriterion] = Field(default_factory=list, max_length=20)
     clarification_question: str | None = Field(default=None, max_length=1000)
     research_query: str | None = Field(default=None, max_length=300)
+    scout_query: str | None = Field(default=None, max_length=120)
 
     @model_validator(mode="after")
     def complete_plan(self):
@@ -84,6 +86,8 @@ class WorkflowState(StrictModel):
     plan: PlanOutput | None = None
     research_results: list[dict] = Field(default_factory=list)
     research_done: bool = False
+    scout_references: list[dict] = Field(default_factory=list)
+    scout_done: bool = False
     code: CodeOutput | None = None
     review: ReviewOutput | None = None
     validation: dict | None = None

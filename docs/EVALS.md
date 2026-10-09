@@ -3,7 +3,7 @@
 Dos piezas independientes:
 
 1. **Backend LangChain** (`MODEL_BACKEND=langchain`, archivo `app/lc_provider.py`): mismo contrato que el cliente HTTP original, pero cada agente queda como una traza hija del grafo en LangSmith, se cuentan tokens por modelo y cada rol puede usar un modelo distinto.
-2. **Batería de evaluación** (`python -m evals`, carpeta `evals/`): 10 escenarios que se corren con el modelo real y se califican con verificaciones deterministas y un juez LLM opcional. Sirve para demostrar con evidencia que el pipeline funciona y para comparar modelos o prompts.
+2. **Batería de evaluación** (`python -m evals`, carpeta `evals/`): 12 escenarios que se corren con el modelo real y se califican con verificaciones deterministas y un juez LLM opcional. Sirve para demostrar con evidencia que el pipeline funciona y para comparar modelos o prompts.
 
 El backend `http` sigue siendo el predeterminado; nada cambia hasta configurar las variables nuevas.
 
@@ -73,6 +73,8 @@ Cada escenario usa una base SQLite y checkpoints temporales, el mismo worker que
 | S8-api-tareas | Ticket de otro dominio | approved |
 | S9a-fallo-autenticacion | Clave inválida: error claro | technical_error |
 | S9b-fallo-timeout | Timeout: estado recuperable | paused |
+| S10-scout-atribucion | Referencia permisiva de Scout y atribución en README | approved |
+| S11-juego-original | Juego original sin referencia de Scout | approved |
 
 Para agregar un escenario, copie un bloque `[[scenario]]`, use un `id` nuevo y escriba una rúbrica con criterios observables. No cambie `id` existentes: enlazan los resultados en LangSmith.
 
@@ -82,6 +84,7 @@ Para agregar un escenario, copie un bloque `[[scenario]]`, use un `id` nuevo y e
 |---|---|---|
 | `estado_esperado` | 0/1 | Estado final dentro de los aceptables |
 | `ruta_esperada` | 0/1 | Clasificación del Router |
+| `scout_esperado`, `atribucion_scout` | 0/1 | Scout usó una referencia permisiva cuando se esperaba y el README cita fuente y licencia |
 | `entrega_codigo` / `sin_codigo_nuevo` | 0/1 | Hay (o no hay) archivos de código en la entrega final |
 | `patrones_en_codigo` | 0-1 | Fracción de expresiones regulares encontradas en el código |
 | `usa_trabajo_previo` | 0/1 | El Coder recibió archivos del turno anterior |

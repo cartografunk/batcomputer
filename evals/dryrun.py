@@ -10,11 +10,18 @@ from app.agents import AgentFailure, TemporaryProviderFailure
 INVALID_KEY = "invalid-eval-key"
 
 
+class DryRunScout:
+    def search(self, _query):
+        return [{"repository": "example/permissive", "url": "https://github.com/example/permissive",
+                 "license": "MIT", "files": [{"path": "app.py", "content": "print('example')\n"}]}]
+
+
 class DryRunProvider:
     def __init__(self, settings):
         self.settings = settings
         self.last_retries = 0
         self.usage = {}
+        self.scout = DryRunScout()
 
     def describe(self):
         return {role: "dry-run" for role in ("router", "question", "planner", "coder", "reviewer")}
@@ -35,8 +42,11 @@ class DryRunProvider:
         if role == "question":
             return {"answer": "Respuesta simulada."}
         if role == "planner":
-            return {"kind": "code", "summary": "Plan simulado", "criteria": [
+            plan = {"kind": "code", "summary": "Plan simulado", "criteria": [
                 {"description": "Entregar un archivo", "verification": "Inspección"}]}
+            if payload["message"].startswith("Busca una referencia permisiva"):
+                plan["scout_query"] = "python pagination example"
+            return plan
         if role == "coder":
             files = [file for file in payload["previous_files"] if file["path"] != "README.md"]
             return {"summary": "Código simulado",
