@@ -86,15 +86,35 @@ if(inviteToken){history.replaceState(null,'',location.pathname+location.search);
 function showAccess(session){const signedIn=session?.authenticated||session?.status==='ready';accessPanel.hidden=!!signedIn;workspace.hidden=!signedIn;logoutButton.hidden=!session?.authenticated;if(!signedIn){streamController?.abort();conversationId=null;lastRunId=null}logoutButton.textContent=session?.email?'Salir · '+session.email:'Salir'}
 function ensureSession(){if(!sessionReady)sessionReady=fetch('/api/session',{credentials:'same-origin'}).then(response=>{if(!response.ok)throw Error('No se pudo consultar la sesión');return response.json()}).then(session=>{showAccess(session);if(session.authenticated===false)throw Error('Inicia sesión para continuar');return session}).catch(error=>{sessionReady=null;throw error});return sessionReady}
 const api=async(path,options={})=>{await ensureSession();let r=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok){if(r.status===401){sessionReady=null;showAccess(null)}throw Error((await r.json()).detail||r.statusText)}return r.json()};
-async function enter(path,body){const label=document.querySelector('#access-status');label.textContent='Conectando…';try{const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||'No se pudo entrar');sessionReady=Promise.resolve(data);showAccess(data);label.textContent='';document.querySelector('#login-password').value='';document.querySelector('#invite-password').value='';return true}catch(error){label.textContent=error.message;return false}}
+async function enter(path,body){const label=document.querySelector('#access-status');label.textContent='Conectando…';try{const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||'No se pudo entrar');sessionReady=Promise.resolve(data);showAccess(data);label.textContent='';document.querySelector('#login-password').value='';document.querySelector('#invite-password').value='';await restoreConversation();return true}catch(error){label.textContent=error.message;return false}}
 document.querySelector('#login-form').onsubmit=event=>{event.preventDefault();enter('/api/auth/login',{email:document.querySelector('#login-email').value,password:document.querySelector('#login-password').value})};
 document.querySelector('#invite-form').onsubmit=async event=>{event.preventDefault();if(await enter('/api/auth/accept-invite',{access_token:inviteToken,password:document.querySelector('#invite-password').value}))inviteToken=null};
 document.querySelector('#guest-login').onclick=()=>enter('/api/auth/guest',{});
 logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});sessionReady=null;showAccess(null);messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#traces').replaceChildren();showFiles([]);preview.hidden=true;preview.srcdoc=''};
-ensureSession().catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
+ensureSession().then(()=>restoreConversation()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
+async function restoreConversation(){
+  const list=await fetch('/api/conversations',{credentials:'same-origin'});
+  if(!list.ok||conversationId)return;
+  const conversations=await list.json();if(!conversations.length)return;
+  const response=await fetch('/api/conversations/'+conversations[0].id,{credentials:'same-origin'});
+  if(!response.ok||conversationId)return;
+  const saved=await response.json();conversationId=saved.id;
+  document.querySelector('#conversation').textContent='Conversación: '+saved.id;
+  messages.replaceChildren(emptyTemplate.cloneNode(true));
+  for(const message of saved.messages)bubble(message.role,message.content);
+  const run=saved.last_run;if(!run)return;
+  lastRunId=run.id;
+  status.textContent=run.status==='queued'?'En cola…':run.status==='running'?'Procesando…':run.status;
+  retryButton.hidden=run.status!=='paused';
+  const filesResponse=await fetch('/api/runs/'+run.id+'/files',{credentials:'same-origin'});
+  if(filesResponse.ok){const files=await filesResponse.json();showFiles(files);showPreview(files,run)}
+  const tracesResponse=await fetch('/api/runs/'+run.id+'/traces',{credentials:'same-origin'});
+  if(tracesResponse.ok){document.querySelector('#traces').replaceChildren();for(const trace of await tracesResponse.json())addTrace({node:trace.stage[0].toUpperCase()+trace.stage.slice(1),status:trace.output?.summary||trace.error||'Completado'})}
+  if(['queued','running'].includes(run.status))watchRun(run.id);
+}
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
   preview.hidden=true;preview.srcdoc='';

@@ -10,7 +10,8 @@ Con `AUTH_MODE=supabase`, `GET /api/session` informa si existe una sesión váli
 | POST | `/api/auth/guest` | Cookie temporal y `{authenticated:true,role:"guest"}` |
 | POST | `/api/auth/logout` | Borra la cookie |
 | POST | `/api/conversations` | `201 {id,created_at}` |
-| GET | `/api/conversations/{id}` | `{id,created_at,pending_clarification,messages:[{id,role,content,created_at}]}` |
+| GET | `/api/conversations` | Últimas 20 conversaciones de la cuenta o invitado actual |
+| GET | `/api/conversations/{id}` | `{id,created_at,pending_clarification,last_run,messages:[{id,role,content,created_at}]}` |
 | POST | `/api/conversations/{id}/messages` | Enviar `{content}`; `202 {run_id,status:"queued"}` |
 | GET | `/api/runs/{id}` | `{id,conversation_id,status,result,attempts,api_retries,validation_status,recovery_count,error,created_at,updated_at}` |
 | POST | `/api/runs/{id}/retry` | `202 {run_id,status:"queued"}` si el run está `paused`; `409` en otro estado |

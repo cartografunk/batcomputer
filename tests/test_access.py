@@ -86,10 +86,13 @@ def test_guest_isolation_and_shared_quota(tmp_path, monkeypatch):
     assert visitor.post("/api/auth/guest").json()["role"] == "guest"
     first = visitor.post("/api/conversations").json()["id"]
     assert visitor.post(f"/api/conversations/{first}/messages", json={"content": "test"}).status_code == 202
+    assert [item["id"] for item in visitor.get("/api/conversations").json()] == [first]
+    assert visitor.get(f"/api/conversations/{first}").json()["last_run"]["status"] == "queued"
 
     another = TestClient(main.app)
     another.post("/api/auth/guest")
     assert another.get(f"/api/conversations/{first}").status_code == 404
+    assert another.get("/api/conversations").json() == []
     second = another.post("/api/conversations").json()["id"]
     blocked = another.post(f"/api/conversations/{second}/messages", json={"content": "test"})
     assert blocked.status_code == 429

@@ -243,14 +243,24 @@ def create_conversation(owner: str = Depends(auth), db: Session = Depends(db_ses
     return {"id": conversation.id, "created_at": conversation.created_at}
 
 
+@app.get("/api/conversations")
+def list_conversations(owner: str = Depends(auth), db: Session = Depends(db_session)):
+    conversations = db.scalars(select(Conversation).where(Conversation.owner_hash == owner)
+                               .order_by(Conversation.created_at.desc(), Conversation.id.desc()).limit(20)).all()
+    return [{"id": item.id, "created_at": item.created_at} for item in conversations]
+
+
 @app.get("/api/conversations/{conversation_id}")
 def get_conversation(conversation_id: str, owner: str = Depends(auth), db: Session = Depends(db_session)):
     conversation = owned_conversation(db, conversation_id, owner)
     if not conversation:
         raise HTTPException(404, "Conversación no encontrada")
     messages = db.scalars(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at, Message.id)).all()
+    last_run = db.scalar(select(Run).where(Run.conversation_id == conversation_id)
+                         .order_by(Run.created_at.desc(), Run.id.desc()).limit(1))
     return {"id": conversation.id, "created_at": conversation.created_at,
             "pending_clarification": conversation.pending_clarification,
+            "last_run": public_run(last_run) if last_run else None,
             "messages": [{"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at} for m in messages]}
 
 

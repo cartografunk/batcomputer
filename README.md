@@ -31,6 +31,8 @@ Vea `.env.example` para la lista completa. `DATABASE_URL` usa `sqlite:///./local
 
 La verificación de la contraseña y la activación de invitaciones pasan por Supabase Auth. FastAPI mantiene una cookie de aplicación firmada y HttpOnly, válida 12 horas para usuarios definidos. Cerrar sesión borra esa cookie. Revocar una cuenta de Supabase no invalida inmediatamente una cookie ya emitida: para cerrar acceso antes de su vencimiento, elimine la dirección de `ALLOWED_USER_EMAILS` o rote `AUTH_TOKENS` (esto cerrará todas las sesiones). [Autenticación con contraseña](https://supabase.com/docs/guides/auth/passwords), [seguridad de contraseñas](https://supabase.com/docs/guides/auth/password-security).
 
+Al volver a abrir la página, la interfaz recupera la última conversación de esa cuenta y sus archivos y trazas recientes. La API lista solo conversaciones propias; una sesión de invitado conserva su historial únicamente mientras dure su cookie.
+
 ### Modelo y búsqueda
 
 Con una clave de la API directa de OpenAI, configure un `MODEL_NAME` al que tenga acceso la clave y `MODEL_BASE_URL=https://api.openai.com/v1`. `ROUTER_MODEL_NAME` permite elegir un modelo ligero del mismo proveedor para Router, conservando el modelo principal en Planner, Coder y Reviewer. El valor de `.env.example` es solo un ejemplo de desarrollo. La batería `python -m evals` permite comparar calidad, latencia y consumo; publique sus resultados cuando se ejecute contra los modelos de producción.
