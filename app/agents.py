@@ -202,7 +202,7 @@ def build_graph(provider, settings: Settings, record, validator, researcher=None
         # A bare expression is unambiguously a question, even without punctuation.
         # Route it without asking the model; calculation still belongs to Question.
         expression = state["message"].strip()
-        expression = re.sub(r"^(?:¿\s*)?(?:cu[aá]nto es|cu[aá]nto da|calcula|resuelve)\s+",
+        expression = re.sub(r"^(?:hola[,!.\s]+)?(?:¿\s*)?(?:cu[aá]nto es|cu[aá]nto da|calcula|resuelve)\s+",
                             "", expression, flags=re.IGNORECASE).strip().rstrip("? ")
         if (not state.get("pending_clarification") and
                 re.fullmatch(r"[\d\s()+\-*/%.]+", expression) and

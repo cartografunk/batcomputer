@@ -83,7 +83,7 @@ def test_initial_approval(store, config):
         assert len(db.scalars(select(FileVersion)).all()) == 2
 
 
-@pytest.mark.parametrize("message", ["2 + 2", "¿Cuánto es 2 + 2?", "Calcula 2+2"])
+@pytest.mark.parametrize("message", ["2 + 2", "¿Cuánto es 2 + 2?", "Calcula 2+2", "Hola cuánto es 2 + 2"])
 def test_bare_arithmetic_uses_question_without_code_pipeline(store, config, message):
     _, run_id = queued(store, content=message)
     fake = FakeProvider([{"answer": "4"}])
