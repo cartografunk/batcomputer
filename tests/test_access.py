@@ -111,7 +111,7 @@ def test_login_issues_member_session_and_rejects_legacy_cookie(tmp_path, monkeyp
     client = TestClient(main.app)
     client.cookies.set("batcomputer_session", "old.anonymous-cookie")
     assert client.post("/api/conversations").status_code == 401
-    login = client.post("/api/auth/login", json={"email": "cartografunk@gmail.com", "password": "example"})
+    login = client.post("/api/auth/login", json={"email": "cartografunk@gmail.com", "password": "example-strong"})
     assert login.status_code == 200
     assert "httponly" in login.headers["set-cookie"].lower()
     assert client.get("/api/session").json()["email"] == "cartografunk@gmail.com"
