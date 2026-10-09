@@ -18,7 +18,12 @@ from .state import WorkflowState
 
 
 def owner_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    if token.startswith("guest:"):
+        return "g" + digest[:63]
+    if token.startswith("user:"):
+        return "u" + digest[:63]
+    return digest
 
 
 def owned_conversation(db: Session, conversation_id: str, owner: str):

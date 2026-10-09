@@ -17,6 +17,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .access import LoginRejected, accept_invitation, authenticate_password, guest_subject, read_session, sign_session
 from .db import Base, Conversation, FileVersion, Message, Run, SessionLocal, Trace, engine, now
 from .service import claim_next, owned_conversation, owned_run, owner_hash, process_run, public_run
 
@@ -59,6 +60,11 @@ async def lifespan(_app):
             raise RuntimeError("Production requires PostgreSQL DATABASE_URL")
         if not settings.auth_tokens.strip() or (settings.model_mode != "ollama" and not settings.model_api_key.strip()):
             raise RuntimeError("Production requires AUTH_TOKENS and MODEL_API_KEY")
+        if settings.auth_mode == "supabase" and (
+            not settings.supabase_url.startswith("https://") or not settings.supabase_publishable_key or
+            not settings.allowed_user_emails.strip()
+        ):
+            raise RuntimeError("Production requires Supabase Auth URL, publishable key and allowed emails")
         if settings.model_mode in {"azure", "azure_responses"} and (
             not settings.azure_openai_endpoint.startswith("https://") or
             not settings.azure_openai_deployment.strip() or
@@ -110,6 +116,13 @@ def cookie_token(value: str | None) -> str | None:
 
 
 def auth(request: Request, authorization: str = Header(default="")):
+    if settings.auth_mode == "supabase":
+        claims = read_session(settings, request.cookies.get(SESSION_COOKIE))
+        if claims is None:
+            raise HTTPException(401, "Inicia sesión para continuar")
+        request.state.access_role = claims["role"]
+        prefix = "user:" if claims["role"] == "member" else "guest:"
+        return owner_hash(prefix + claims["sub"])
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if authorization:
         valid = any(secrets.compare_digest(token, configured.strip()) for configured in settings.auth_tokens.split(",") if configured.strip())
@@ -126,6 +139,22 @@ class MessageIn(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
 
 
+class LoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class InviteIn(BaseModel):
+    access_token: str = Field(min_length=1, max_length=8192)
+    password: str = Field(min_length=8, max_length=1024)
+
+
+def set_access_cookie(response: Response, value: str, max_age: int):
+    response.set_cookie(SESSION_COOKIE, value, max_age=max_age, httponly=True,
+                        secure=settings.app_env == "production", samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+
+
 @app.get("/")
 def home():
     return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-store"})
@@ -133,6 +162,11 @@ def home():
 
 @app.get("/api/session")
 def ensure_session(request: Request, response: Response):
+    if settings.auth_mode == "supabase":
+        claims = read_session(settings, request.cookies.get(SESSION_COOKIE))
+        response.headers["Cache-Control"] = "no-store"
+        return {"authenticated": bool(claims), "role": claims["role"] if claims else None,
+                "email": claims.get("email") if claims and claims["role"] == "member" else None}
     token = cookie_token(request.cookies.get(SESSION_COOKIE))
     if token is None:
         token = secrets.token_urlsafe(32)
@@ -141,6 +175,50 @@ def ensure_session(request: Request, response: Response):
                             httponly=True, secure=settings.app_env == "production", samesite="lax")
     response.headers["Cache-Control"] = "no-store"
     return {"status": "ready"}
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn, response: Response):
+    if settings.auth_mode != "supabase":
+        raise HTTPException(404)
+    try:
+        user = authenticate_password(settings, body.email, body.password)
+    except LoginRejected:
+        raise HTTPException(401, "Correo o contraseña incorrectos") from None
+    except RuntimeError:
+        raise HTTPException(503, "El acceso no está disponible temporalmente") from None
+    set_access_cookie(response, sign_session(settings, "member", user["id"], user["email"]), 12 * 3600)
+    return {"authenticated": True, "role": "member", "email": user["email"]}
+
+
+@app.post("/api/auth/accept-invite")
+def accept_invite(body: InviteIn, response: Response):
+    if settings.auth_mode != "supabase":
+        raise HTTPException(404)
+    try:
+        user = accept_invitation(settings, body.access_token, body.password)
+    except LoginRejected:
+        raise HTTPException(401, "La invitación expiró o la contraseña no es válida") from None
+    except RuntimeError:
+        raise HTTPException(503, "El acceso no está disponible temporalmente") from None
+    set_access_cookie(response, sign_session(settings, "member", user["id"], user["email"]), 12 * 3600)
+    return {"authenticated": True, "role": "member", "email": user["email"]}
+
+
+@app.post("/api/auth/guest")
+def guest_login(response: Response):
+    if settings.auth_mode != "supabase":
+        raise HTTPException(404)
+    set_access_cookie(response, sign_session(settings, "guest", guest_subject()), 3600)
+    return {"authenticated": True, "role": "guest", "email": None}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True,
+                           secure=settings.app_env == "production", samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+    return {"authenticated": False}
 
 
 @app.get("/flappy")
@@ -177,19 +255,27 @@ def get_conversation(conversation_id: str, owner: str = Depends(auth), db: Sessi
 
 
 @app.post("/api/conversations/{conversation_id}/messages", status_code=202)
-def send_message(conversation_id: str, body: MessageIn, owner: str = Depends(auth), db: Session = Depends(db_session)):
+def send_message(conversation_id: str, body: MessageIn, request: Request,
+                 owner: str = Depends(auth), db: Session = Depends(db_session)):
     if not owned_conversation(db, conversation_id, owner):
         raise HTTPException(404, "Conversación no encontrada")
     since = now() - timedelta(hours=1)
     count = db.scalar(select(func.count(Run.id)).join(Conversation).where(Conversation.owner_hash == owner, Run.created_at >= since))
-    if count >= settings.rate_limit_per_hour:
+    is_guest = settings.auth_mode == "supabase" and request.state.access_role == "guest"
+    own_limit = settings.guest_rate_limit_per_hour if is_guest else settings.rate_limit_per_hour
+    if count >= own_limit:
         raise HTTPException(429, "Límite de uso por hora alcanzado")
+    if is_guest:
+        guest_count = db.scalar(select(func.count(Run.id)).join(Conversation).where(
+            Conversation.owner_hash.like("g%"), Run.created_at >= since))
+        if guest_count >= settings.guest_global_rate_limit_per_hour:
+            raise HTTPException(429, "Cupo de invitado agotado por esta hora")
     global_count = db.scalar(select(func.count(Run.id)).where(Run.created_at >= since))
     if global_count >= settings.global_rate_limit_per_hour:
         raise HTTPException(429, "Límite global de uso por hora alcanzado")
     in_flight = db.scalar(select(func.count(Run.id)).join(Conversation).where(
         Conversation.owner_hash == owner, Run.status.in_(["queued", "running"])))
-    if in_flight >= settings.max_queued_runs_per_owner:
+    if in_flight >= (1 if is_guest else settings.max_queued_runs_per_owner):
         raise HTTPException(429, "Demasiados trabajos pendientes")
     message = Message(conversation_id=conversation_id, role="user", content=body.content)
     db.add(message)

@@ -6,13 +6,14 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=2">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=3">
 </head>
 <body>
   <header class="site-header">
     <a class="brand" href="https://www.cartografunk.com/" aria-label="Cartografunk, volver al sitio principal">CARTOGRAFUNK</a>
     <nav class="header-links" aria-label="Navegación de Batcomputer">
       <a href="https://www.cartografunk.com/">Volver a Cartografunk ↗</a>
+      <button class="button button-outline" id="logout" type="button" hidden>Salir</button>
     </nav>
   </header>
   <main class="shell">
@@ -20,7 +21,29 @@
       <p class="eyebrow">Cartografunk / Laboratorio multiagente</p>
       <h1>BAT<em>computer</em></h1>
     </div>
-    <div class="workspace">
+    <section class="panel access-panel" id="access-panel" aria-labelledby="access-heading" hidden>
+      <p class="panel-kicker">Acceso / Batcomputer</p>
+      <h2 id="access-heading">Entrar al laboratorio</h2>
+      <p>Acceso para el equipo y evaluadores invitados.</p>
+      <form id="login-form">
+        <label for="login-email">Correo</label>
+        <input id="login-email" type="email" autocomplete="username" required>
+        <label for="login-password">Contraseña</label>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+        <button class="button button-primary" type="submit">Iniciar sesión ↗</button>
+      </form>
+      <form id="invite-form" hidden>
+        <p>Invitación recibida. Define una contraseña de al menos 8 caracteres.</p>
+        <label for="invite-password">Nueva contraseña</label>
+        <input id="invite-password" type="password" autocomplete="new-password" minlength="8" required>
+        <button class="button button-primary" type="submit">Activar mi acceso ↗</button>
+      </form>
+      <div class="access-divider" id="access-divider">o</div>
+      <button class="button button-outline" id="guest-login" type="button">Entrar como invitado</button>
+      <p class="access-note">El acceso de invitado tiene un cupo compartido limitado.</p>
+      <p id="access-status" role="status" aria-live="polite"></p>
+    </section>
+    <div class="workspace" id="workspace" hidden>
       <section class="panel chat-panel" aria-labelledby="chat-heading">
         <div class="panel-head">
           <div><p class="panel-kicker">01 / Conversación</p><h2 id="chat-heading">Mesa de trabajo</h2></div>
@@ -57,9 +80,18 @@
     <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
   </main>
 <script>
-const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true);let conversationId=null,lastRunId=null,streamController=null,sessionReady=null;
-function ensureSession(){if(!sessionReady)sessionReady=fetch('/api/session',{credentials:'same-origin'}).then(response=>{if(!response.ok)throw Error('No se pudo iniciar la sesión');return response.json()}).catch(error=>{sessionReady=null;throw error});return sessionReady}
-const api=async(path,options={})=>{await ensureSession();let r=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok)throw Error((await r.json()).detail||r.statusText);return r.json()};
+const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null;
+const inviteParams=new URLSearchParams(location.hash.slice(1));let inviteToken=inviteParams.get('type')==='invite'?inviteParams.get('access_token'):null;
+if(inviteToken){history.replaceState(null,'',location.pathname+location.search);document.querySelector('#login-form').hidden=true;document.querySelector('#invite-form').hidden=false;document.querySelector('#guest-login').hidden=true;document.querySelector('#access-divider').hidden=true}
+function showAccess(session){const signedIn=session?.authenticated||session?.status==='ready';accessPanel.hidden=!!signedIn;workspace.hidden=!signedIn;logoutButton.hidden=!session?.authenticated;if(!signedIn){streamController?.abort();conversationId=null;lastRunId=null}logoutButton.textContent=session?.email?'Salir · '+session.email:'Salir'}
+function ensureSession(){if(!sessionReady)sessionReady=fetch('/api/session',{credentials:'same-origin'}).then(response=>{if(!response.ok)throw Error('No se pudo consultar la sesión');return response.json()}).then(session=>{showAccess(session);if(session.authenticated===false)throw Error('Inicia sesión para continuar');return session}).catch(error=>{sessionReady=null;throw error});return sessionReady}
+const api=async(path,options={})=>{await ensureSession();let r=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok){if(r.status===401){sessionReady=null;showAccess(null)}throw Error((await r.json()).detail||r.statusText)}return r.json()};
+async function enter(path,body){const label=document.querySelector('#access-status');label.textContent='Conectando…';try{const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||'No se pudo entrar');sessionReady=Promise.resolve(data);showAccess(data);label.textContent='';document.querySelector('#login-password').value='';document.querySelector('#invite-password').value='';return true}catch(error){label.textContent=error.message;return false}}
+document.querySelector('#login-form').onsubmit=event=>{event.preventDefault();enter('/api/auth/login',{email:document.querySelector('#login-email').value,password:document.querySelector('#login-password').value})};
+document.querySelector('#invite-form').onsubmit=async event=>{event.preventDefault();if(await enter('/api/auth/accept-invite',{access_token:inviteToken,password:document.querySelector('#invite-password').value}))inviteToken=null};
+document.querySelector('#guest-login').onclick=()=>enter('/api/auth/guest',{});
+logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});sessionReady=null;showAccess(null);messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#traces').replaceChildren();showFiles([]);preview.hidden=true;preview.srcdoc=''};
+ensureSession().catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}

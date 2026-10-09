@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./local.db"
     langgraph_sqlite_path: str = "./langgraph_state.sqlite"
     auth_tokens: str = ""
+    auth_mode: Literal["legacy", "supabase"] = "legacy"
+    supabase_url: str = ""
+    supabase_publishable_key: str = ""
+    allowed_user_emails: str = "cartografunk@gmail.com,iramjuarez98@hotmail.com"
+    guest_rate_limit_per_hour: int = Field(default=3, ge=0)
+    guest_global_rate_limit_per_hour: int = Field(default=10, ge=0)
     model_api_key: str = ""
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4.1-mini"

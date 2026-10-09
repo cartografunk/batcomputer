@@ -39,6 +39,18 @@ h1, h2, h3, p { margin-top: 0; }
 .intro h1 { position: relative; margin: 0 0 10px; font: 800 clamp(42px,5vw,74px)/.99 var(--display); letter-spacing: -.045em; }
 .intro h1 em { color: var(--purple-bright); font: italic 300 1em 'Fraunces',serif; }
 .workspace { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(325px,1fr); gap: 16px; padding-top: 24px; align-items: stretch; }
+.workspace[hidden], .access-panel[hidden], #logout[hidden], #invite-form[hidden], #login-form[hidden], #guest-login[hidden], #access-divider[hidden] { display: none; }
+.access-panel { max-width: 470px; margin: 28px auto 0; padding: 30px; }
+.access-panel h2 { font: 700 28px var(--display); margin-bottom: 8px; }
+.access-panel p { color: var(--muted); font-size: 14px; }
+#login-form, #invite-form { display: grid; gap: 8px; }
+#login-form label, #invite-form label { margin-top: 8px; font: 12px var(--mono); color: var(--purple-bright); text-transform: uppercase; }
+#login-form input, #invite-form input { width: 100%; min-height: 44px; padding: 8px 12px; color: var(--text); background: #090912; border: 1px solid var(--line); }
+#login-form .button, #invite-form .button { margin-top: 14px; }
+.access-divider { margin: 22px 0; text-align: center; color: var(--muted); font: 12px var(--mono); }
+#guest-login { width: 100%; }
+.access-note { margin: 12px 0 0; }
+#access-status { min-height: 20px; margin: 12px 0 0; color: var(--purple-bright) !important; }
 .panel { background: var(--card); border: 1px solid var(--line); min-width: 0; box-shadow: 0 18px 65px rgba(0,0,0,.12); }
 .chat-panel { display: flex; flex-direction: column; min-height: min(720px,calc(100vh - 260px)); }
 .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 24px 28px 21px; border-bottom: 1px solid var(--line); }
