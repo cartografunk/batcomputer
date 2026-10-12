@@ -29,5 +29,6 @@ La URL del sistema está publicada. La disponibilidad debe comprobarse de nuevo 
 - Un ticket de cupones con contrato y casos explícitos terminó `approved` en un intento y entregó `coupons.py`, pruebas y README. Las trazas incluyeron Router, Planner, Coder, Validator, Reviewer y Documenter.
 - En otro hilo, una calculadora terminó `approved`; la petición de agregar multiplicación también terminó `approved`. El segundo run tomó el snapshot anterior como base y su archivo final conservó `add` y `subtract` junto con `multiply`. Una pregunta posterior terminó `answered` sin archivos nuevos.
 - La validación de esas entregas fue `not_executed`: no hay `E2B_API_KEY` configurada. La aprobación del Reviewer no demuestra que las pruebas generadas se hayan ejecutado. El ticket inicial de cupones, menos específico, pidió aclaración; conviene mostrar también ese comportamiento durante la entrevista.
+- Tras cambiar Coder a salida estructurada estricta en Azure, un pedido real de Flappy Bird para navegador terminó `approved` y produjo `index.html` y README. El script inline pasó `node --check`; el HTML generado aún no se probó jugando. `/flappy` sigue siendo una implementación independiente.
 
 Queda pendiente ejecutar y revisar el código generado en un sandbox real, repetir el ejemplo exacto del enunciado y confirmar de nuevo la disponibilidad el día de la entrevista.
