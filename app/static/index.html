@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=6">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=7">
 </head>
 <body>
   <header class="site-header">
@@ -72,10 +72,14 @@
         </section>
         <section class="panel side-section artifact-panel">
           <p class="panel-kicker">03 / Entrega</p>
-          <h2>Código generado</h2>
+          <div class="artifact-title">
+            <h2>Código generado</h2>
+            <button class="button button-outline" id="copy-all" type="button" hidden>Copiar todo</button>
+          </div>
           <p id="no-files">Sin archivos todavía.</p>
           <select id="file-picker" aria-label="Archivo generado" hidden></select>
           <pre id="files"></pre>
+          <p id="copy-status" role="status" aria-live="polite" hidden></p>
           <div id="preview-section" hidden>
             <h2>Vista previa</h2>
             <p id="preview-note">Iframe aislado: scripts locales permitidos; recursos externos bloqueados.</p>
@@ -101,7 +105,7 @@ logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',cre
 ensureSession().then(()=>refreshHistory()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
-function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);picker.hidden=!snapshot.length;document.querySelector('#no-files').hidden=!!snapshot.length;if(!snapshot.length){out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
+function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files'),copyButton=document.querySelector('#copy-all'),copyStatus=document.querySelector('#copy-status');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);picker.hidden=!snapshot.length;copyButton.hidden=!snapshot.length;copyStatus.hidden=true;copyStatus.textContent='';document.querySelector('#no-files').hidden=!!snapshot.length;if(!snapshot.length){out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange();copyButton.onclick=async()=>{const text=snapshot.length===1?snapshot[0].content:snapshot.map(file=>'===== '+file.path+' =====\n'+file.content).join('\n\n');try{await navigator.clipboard.writeText(text);copyStatus.textContent=snapshot.length===1?'Archivo copiado.':snapshot.length+' archivos copiados.'}catch{copyStatus.textContent='No se pudo copiar. Revisa los permisos del navegador.'}copyStatus.hidden=false}}
 function resetConversation(){
   viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
