@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["legacy", "supabase"] = "legacy"
     supabase_url: str = ""
     supabase_publishable_key: str = ""
-    allowed_user_emails: str = "cartografunk@gmail.com,iramjuarez98@hotmail.com"
+    allowed_user_emails: str = ""
     guest_rate_limit_per_hour: int = Field(default=3, ge=0)
     guest_global_rate_limit_per_hour: int = Field(default=10, ge=0)
     model_api_key: str = ""

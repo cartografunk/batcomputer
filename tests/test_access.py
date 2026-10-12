@@ -8,9 +8,10 @@ from app.service import owner_hash
 
 
 def config(**kwargs):
-    return Settings(_env_file=None, auth_tokens="test-signing-key", auth_mode="supabase",
-                    supabase_url="https://example.supabase.co", supabase_publishable_key="sb_publishable_test",
-                    **kwargs)
+    values = {"auth_tokens": "test-signing-key", "auth_mode": "supabase",
+              "supabase_url": "https://example.supabase.co", "supabase_publishable_key": "sb_publishable_test",
+              "allowed_user_emails": "member1@example.com,member2@example.com"}
+    return Settings(_env_file=None, **(values | kwargs))
 
 
 def test_password_signin_checks_supabase_and_allowlist(monkeypatch):
@@ -18,11 +19,11 @@ def test_password_signin_checks_supabase_and_allowlist(monkeypatch):
 
     def post(url, **kwargs):
         seen.append((url, kwargs))
-        return httpx.Response(200, json={"user": {"id": "user-123", "email": "cartografunk@gmail.com"}})
+        return httpx.Response(200, json={"user": {"id": "user-123", "email": "member1@example.com"}})
 
     monkeypatch.setattr(httpx, "post", post)
-    user = authenticate_password(config(), "Cartografunk@gmail.com", "private-password")
-    assert user == {"id": "user-123", "email": "cartografunk@gmail.com"}
+    user = authenticate_password(config(), "Member1@example.com", "private-password")
+    assert user == {"id": "user-123", "email": "member1@example.com"}
     assert seen[0][0] == "https://example.supabase.co/auth/v1/token"
     assert seen[0][1]["params"] == {"grant_type": "password"}
     assert seen[0][1]["json"]["password"] == "private-password"
@@ -36,7 +37,7 @@ def test_invitation_verifies_identity_before_setting_password(monkeypatch):
 
     def get(url, **kwargs):
         calls.append(("get", url, kwargs))
-        return httpx.Response(200, json={"id": "user-123", "email": "iramjuarez98@hotmail.com"})
+        return httpx.Response(200, json={"id": "user-123", "email": "member2@example.com"})
 
     def put(url, **kwargs):
         calls.append(("put", url, kwargs))
@@ -55,9 +56,9 @@ def test_signed_sessions_expire_and_allowlist_applies(monkeypatch):
     import app.access as access
 
     monkeypatch.setattr(access.time, "time", lambda: 1000)
-    token = sign_session(config(), "member", "user-123", "cartografunk@gmail.com")
+    token = sign_session(config(), "member", "user-123", "member1@example.com")
     assert read_session(config(), token)["sub"] == "user-123"
-    assert read_session(config(allowed_user_emails="iramjuarez98@hotmail.com"), token) is None
+    assert read_session(config(allowed_user_emails="member2@example.com"), token) is None
     assert read_session(config(), token + "x") is None
     monkeypatch.setattr(access.time, "time", lambda: 1000 + 12 * 3600)
     assert read_session(config(), token) is None
@@ -109,13 +110,14 @@ def test_login_issues_member_session_and_rejects_legacy_cookie(tmp_path, monkeyp
     monkeypatch.setattr(main, "SessionLocal", sessionmaker(engine, expire_on_commit=False))
     monkeypatch.setattr(main.settings, "auth_mode", "supabase")
     monkeypatch.setattr(main.settings, "auth_tokens", "test-signing-key")
+    monkeypatch.setattr(main.settings, "allowed_user_emails", "member1@example.com")
     monkeypatch.setattr(main, "authenticate_password", lambda _settings, email, _password:
                         {"id": "user-123", "email": email.lower()})
     client = TestClient(main.app)
     client.cookies.set("batcomputer_session", "old.anonymous-cookie")
     assert client.post("/api/conversations").status_code == 401
-    login = client.post("/api/auth/login", json={"email": "cartografunk@gmail.com", "password": "example-strong"})
+    login = client.post("/api/auth/login", json={"email": "member1@example.com", "password": "example-strong"})
     assert login.status_code == 200
     assert "httponly" in login.headers["set-cookie"].lower()
-    assert client.get("/api/session").json()["email"] == "cartografunk@gmail.com"
+    assert client.get("/api/session").json()["email"] == "member1@example.com"
     assert client.post("/api/conversations").status_code == 201

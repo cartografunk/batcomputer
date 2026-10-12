@@ -1,6 +1,7 @@
 """Historiales sembrados para escenarios que necesitan un estado previo determinista."""
 
-from app.db import FileVersion, Message, Review, Run
+from app.db import Conversation, FileVersion, Message, Review, Run
+from app.snapshots import write_snapshot
 
 COUPON_TICKET = ("Agregar validación de cupones de descuento al carrito de compras: el cupón debe existir, "
                  "no estar expirado y no exceder el monto del carrito.")
@@ -56,6 +57,10 @@ def exhausted_coupon(store, conversation_id: str) -> None:
         db.flush()
         db.add(FileVersion(conversation_id=conversation_id, run_id=run.id, attempt=3,
                            path="coupons.py", content=BUGGY_COUPONS))
+        db.flush()
+        snapshot = write_snapshot(db, run, 3, [], None)
+        run.result_snapshot_id = snapshot.id
+        db.get(Conversation, conversation_id).candidate_snapshot_id = snapshot.id
         db.add(Review(run_id=run.id, attempt=3, content={
             "approved": False, "summary": "Persisten dos defectos en la validación.", "feedback": REVIEW_FEEDBACK}))
         db.add(Message(conversation_id=conversation_id, role="assistant", content=EXHAUSTED_RESULT))

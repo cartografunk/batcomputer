@@ -1,4 +1,5 @@
 from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import pytest
@@ -8,8 +9,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.agents import AgentFailure, ModelProvider, TavilyResearcher, TemporaryProviderFailure, build_graph
 from app.config import Settings
-from app.db import Base, Conversation, FileVersion, Message, Review, Run, Trace, make_engine, now
-from app.service import claim_next, latest_files, owner_hash, process_run
+from app.db import Base, Conversation, FileVersion, Message, Review, Run, Trace, ensure_sqlite_compatibility, make_engine, now
+from app.service import claim_next, owner_hash, process_run
+from app.snapshots import snapshot_files
 from app.state import PlanOutput, WorkflowState
 
 
@@ -22,8 +24,9 @@ class FakeProvider:
         self.calls.append((role, payload))
         if role == "router":
             kind = "QUESTION" if "?" in payload["message"] or payload["message"].startswith("What ") else (
-                "MODIFICATION" if payload["has_previous_files"] else "NEW_TICKET")
-            return {"kind": kind, "reason": "Simulated route"}
+                "MODIFICATION" if payload["has_previous_files"] or payload.get("has_candidate") else "NEW_TICKET")
+            return {"kind": kind, "reason": "Simulated route",
+                    "base": "candidate" if payload.get("has_candidate") and not payload["has_previous_files"] else "approved"}
         result = next(self.answers)
         if isinstance(result, Exception):
             raise result
@@ -99,15 +102,61 @@ def test_rejection_correction_approval(store, config):
     run = execute(store, config, run_id, fake)
     assert (run.status, run.attempts) == ("approved", 2)
     assert fake.calls[4][1]["review_feedback"] == ["Fix output"]
+    assert fake.calls[4][1]["previous_files"] == []
+    assert fake.calls[4][1]["prior_candidate"] == CODE
     with store() as db:
         assert [f.attempt for f in db.scalars(select(FileVersion).order_by(FileVersion.attempt)).all()] == [1, 2, 2]
-        assert {f["path"] for f in latest_files(db, run.conversation_id)} == {"app.py", "README.md"}
+        head_id = db.get(Conversation, run.conversation_id).head_snapshot_id
+        assert {f["path"] for f in snapshot_files(db, head_id)} == {"app.py"}
+
+
+def test_followup_uses_only_approved_attempt_files(store, config):
+    conversation, first = queued(store)
+    initial = {"summary": "First attempt", "files": [
+        {"path": "app.py", "content": "print('first')"},
+        {"path": "obsolete.py", "content": "print('removed')"},
+    ]}
+    revised = {"summary": "Removed obsolete file", "files": [
+        {"path": "app.py", "content": "print('final')"},
+    ]}
+    run = execute(store, config, first, FakeProvider([PLAN, initial, NO, revised, YES]))
+    assert run.status == "approved"
+    with store() as db:
+        head_id = db.get(Conversation, conversation).head_snapshot_id
+        assert snapshot_files(db, head_id) == [{"path": "app.py", "content": "print('final')"}]
+        assert {file.path for file in db.scalars(select(FileVersion)).all()} == {
+            "app.py", "obsolete.py", "README.md"}
 
 
 def test_exhaustion(store, config):
     _, run_id = queued(store)
     run = execute(store, config, run_id, FakeProvider([PLAN, CODE, NO, CODE, NO, CODE, NO]))
     assert (run.status, run.attempts) == ("exhausted", 3)
+    assert run.result == ("Se alcanzó el límite de intentos de revisión. Error persistente detectado.\n"
+                          "- Fix output")
+
+
+def test_exhaustion_lists_only_final_reviewer_feedback_with_limits(store, config):
+    _, run_id = queued(store)
+    final_feedback = ["criterio " + str(index) + " " + "x" * 400 for index in range(7)]
+    final_review = {"approved": False, "summary": "No cumple", "feedback": final_feedback}
+    run = execute(store, config, run_id, FakeProvider([
+        PLAN, CODE, NO, CODE, NO, CODE, final_review]))
+    assert run.status == "exhausted"
+    lines = run.result.splitlines()
+    assert lines[0] == "Se alcanzó el límite de intentos de revisión. Error persistente detectado."
+    assert len(lines) == 6
+    assert lines[1:] == ["- " + item[:300] for item in final_feedback[:5]]
+    assert all(len(line[2:]) <= 300 for line in lines[1:])
+    assert "Fix output" not in run.result
+
+
+def test_exhaustion_without_final_feedback_keeps_only_first_line(store, config):
+    _, run_id = queued(store)
+    final_review = {"approved": False, "summary": "No cumple", "feedback": []}
+    run = execute(store, config, run_id, FakeProvider([
+        PLAN, CODE, NO, CODE, NO, CODE, final_review]))
+    assert run.status == "exhausted"
     assert run.result == "Se alcanzó el límite de intentos de revisión. Error persistente detectado."
 
 
@@ -149,6 +198,62 @@ def test_provider_failure_pauses_and_can_requeue(store, config, monkeypatch):
         assert db.get(Run, run_id).status == "approved"
 
 
+def test_retry_after_paused_coder_uses_approved_attempt(store, config, monkeypatch):
+    import app.main as main
+
+    conversation, run_id = queued(store)
+    first = {"summary": "First draft", "files": [
+        {"path": "app.py", "content": "print('old')"},
+        {"path": "obsolete.py", "content": "print('remove')"},
+    ]}
+    fixed = {"summary": "Fixed draft", "files": [
+        {"path": "app.py", "content": "print('fixed')"},
+    ]}
+    paused = execute(store, config, run_id, FakeProvider([
+        PLAN, first, NO, TemporaryProviderFailure("Fallo temporal del proveedor de IA.")]))
+    assert paused.status == "paused"
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    response = TestClient(main.app).post(
+        f"/api/runs/{run_id}/retry", headers={"Authorization": "Bearer alice"})
+    assert response.status_code == 202
+    with store() as db:
+        claimed, lease = claim_next(db, config)
+        assert claimed == run_id
+    process_run(store, run_id, config, FakeProvider([fixed, YES]), lease)
+    with store() as db:
+        run = db.get(Run, run_id)
+        assert (run.status, run.attempts) == ("approved", 2)
+        head_id = db.get(Conversation, conversation).head_snapshot_id
+        assert snapshot_files(db, head_id) == [
+            {"path": "app.py", "content": "print('fixed')"}]
+        assert {(item.attempt, item.path) for item in db.scalars(select(FileVersion)).all()} == {
+            (1, "app.py"), (1, "obsolete.py"), (2, "app.py"), (2, "README.md")}
+    _, next_run = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")),
+                         content="Add logging")
+    followup = FakeProvider([PLAN, fixed, YES])
+    assert execute(store, config, next_run, followup).status == "approved"
+    assert [payload["previous_files"] for role, payload in followup.calls if role == "coder"] == [
+        [{"path": "app.py", "content": "print('fixed')"}]]
+
+
+def test_paused_run_cannot_retry_after_later_run(store, config, monkeypatch):
+    import app.main as main
+
+    conversation, first = queued(store)
+    paused = execute(store, config, first, FakeProvider([
+        TemporaryProviderFailure("Fallo temporal del proveedor de IA. Tu estado está guardado. Intenta de nuevo.")]))
+    assert paused.status == "paused"
+    _, second = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")))
+    execute(store, config, second, FakeProvider([PLAN, CODE, YES]))
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    response = TestClient(main.app).post(f"/api/runs/{first}/retry", headers={"Authorization": "Bearer alice"})
+    assert response.status_code == 409
+    with store() as db:
+        assert db.get(Run, first).status == "paused"
+
+
 def test_sse_streams_agent_events_and_enforces_owner(store, config, monkeypatch):
     import app.main as main
     conversation, run_id = queued(store)
@@ -186,6 +291,65 @@ def test_anonymous_session_owns_conversation_and_respects_global_limit(store, mo
     assert other.get(f"/api/conversations/{conversation_id}").status_code == 404
     assert visitor.post(f"/api/conversations/{conversation_id}/messages", json={"content": "Ticket"}).status_code == 202
     assert visitor.post(f"/api/conversations/{conversation_id}/messages", json={"content": "Otro"}).status_code == 429
+
+
+def test_message_idempotency_returns_original_run_before_rate_limit(store, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    monkeypatch.setattr(main.settings, "max_queued_runs_per_owner", 1)
+    client = TestClient(main.app)
+    headers = {"Authorization": "Bearer alice"}
+    conversation = client.post("/api/conversations", headers=headers).json()["id"]
+    url = f"/api/conversations/{conversation}/messages"
+    payload = {"content": "Build app", "client_message_id": "intent-1"}
+    first = client.post(url, headers=headers, json=payload)
+    repeat = client.post(url, headers=headers, json=payload)
+    changed = client.post(url, headers=headers, json={**payload, "content": "Build another app"})
+    over_limit = client.post(url, headers=headers, json={**payload, "client_message_id": "intent-2"})
+    assert first.status_code == repeat.status_code == 202
+    assert repeat.json()["run_id"] == first.json()["run_id"]
+    assert changed.status_code == 409
+    assert over_limit.status_code == 429
+    with store() as db:
+        assert len(db.scalars(select(Run)).all()) == 1
+        assert len(db.scalars(select(Message)).all()) == 1
+
+
+def test_existing_sqlite_database_adds_idempotency_columns(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE messages (id varchar(36), conversation_id varchar(36), "
+                               "role varchar(16), content text, created_at datetime)")
+    ensure_sqlite_compatibility(engine)
+    ensure_sqlite_compatibility(engine)
+    with engine.connect() as connection:
+        columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(messages)")}
+        indexes = {row[1] for row in connection.exec_driver_sql("PRAGMA index_list(messages)")}
+    assert {"client_message_id", "request_hash"} <= columns
+    assert "ux_messages_idempotency" in indexes
+
+
+def test_concurrent_message_retry_creates_one_run(store, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main, "SessionLocal", store)
+    monkeypatch.setattr(main.settings, "auth_tokens", "alice,bob")
+    headers = {"Authorization": "Bearer alice"}
+    conversation = TestClient(main.app).post("/api/conversations", headers=headers).json()["id"]
+    url = f"/api/conversations/{conversation}/messages"
+    payload = {"content": "Build app", "client_message_id": "same-intent"}
+
+    def send(_):
+        return TestClient(main.app).post(url, headers=headers, json=payload)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(send, range(2)))
+    assert [response.status_code for response in responses] == [202, 202]
+    assert responses[0].json()["run_id"] == responses[1].json()["run_id"]
+    with store() as db:
+        assert len(db.scalars(select(Run)).all()) == 1
 
 
 def test_ollama_mode_needs_no_remote_api_key(monkeypatch):
@@ -233,8 +397,8 @@ def test_followup_uses_previous_code(store, config):
     fake = FakeProvider([PLAN, modified, YES])
     run = execute(store, config, second, fake)
     assert run.status == "approved"
-    assert {f["path"] for f in fake.calls[1][1]["files"]} == {"app.py", "README.md"}
-    assert {f["path"] for f in fake.calls[2][1]["previous_files"]} == {"app.py", "README.md"}
+    assert {f["path"] for f in fake.calls[1][1]["files"]} == {"app.py"}
+    assert {f["path"] for f in fake.calls[2][1]["previous_files"]} == {"app.py"}
 
 
 def test_question_does_not_reimplement(store, config):
@@ -682,6 +846,11 @@ def test_clarification_persists_until_followup(store, config):
                      "clarification_question": "Which coordinate system should I use?"}
     run = execute(store, config, first, FakeProvider([clarification]))
     assert run.status == "needs_clarification"
+    with store() as db:
+        assert db.get(Conversation, conversation).pending_clarification == clarification["clarification_question"]
+    _, question = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")),
+                         content="What time is it?")
+    assert execute(store, config, question, FakeProvider([{"answer": "No tengo la hora actual."}])).status == "answered"
     with store() as db:
         assert db.get(Conversation, conversation).pending_clarification == clarification["clarification_question"]
     _, second = queued(store, conversation=Conversation(id=conversation, owner_hash=owner_hash("alice")), content="Use WGS84")

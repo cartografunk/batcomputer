@@ -37,8 +37,9 @@ class DryRunProvider:
         if role == "router":
             message = payload["message"]
             kind = ("QUESTION" if "?" in message else
-                    "MODIFICATION" if payload["has_previous_files"] else "NEW_TICKET")
-            return {"kind": kind, "reason": "Simulado"}
+                    "MODIFICATION" if payload["has_previous_files"] or payload.get("has_candidate") else "NEW_TICKET")
+            return {"kind": kind, "reason": "Simulado",
+                    "base": "candidate" if payload.get("has_candidate") and not payload["has_previous_files"] else "approved"}
         if role == "question":
             return {"answer": "Respuesta simulada."}
         if role == "planner":
@@ -48,7 +49,7 @@ class DryRunProvider:
                 plan["scout_query"] = "python pagination example"
             return plan
         if role == "coder":
-            files = [file for file in payload["previous_files"] if file["path"] != "README.md"]
+            files = payload["previous_files"]
             return {"summary": "Código simulado",
                     "files": files or [{"path": "main.py", "content": "print('simulado')\n"}]}
         if role == "reviewer":

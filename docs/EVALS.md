@@ -97,7 +97,7 @@ Para agregar un escenario, copie un bloque `[[scenario]]`, use un `id` nuevo y e
 
 ## Qué esperar en la primera corrida
 
-- **S6 `usa_trabajo_previo = 0`** con el código actual: el siguiente turno solo recibe entregas aprobadas, así que el código rechazado no llega al Coder (defecto D1 del informe de revisión). La métrica queda en 1 cuando se corrija.
+- **S6 `usa_trabajo_previo = 1` en modo simulado** tras habilitar el candidato rechazado: Router usa `MODIFICATION` y el Coder recibe su archivo y feedback. Esta verificación prueba el cableado del contexto; falta ejecutarla con un modelo real para evaluar la calidad de la corrección.
 - **`validacion_ejecutada = not_executed`** salvo con E2B y pruebas generadas por el Coder; su prompt no las pide todavía.
 - El juez es un modelo: use `--repeat 3` antes de comparar configuraciones y revise las justificaciones, no solo el número.
 

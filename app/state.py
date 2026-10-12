@@ -18,6 +18,7 @@ class RouteOutput(StrictModel):
     kind: Literal["NEW_TICKET", "MODIFICATION", "QUESTION"]
     reason: str = Field(min_length=1, max_length=500)
     search_query: str | None = Field(default=None, max_length=300)
+    base: Literal["approved", "candidate"] = "approved"
 
 
 class AcceptanceCriterion(StrictModel):
@@ -80,7 +81,15 @@ class ReviewOutput(StrictModel):
 class WorkflowState(StrictModel):
     message: str = Field(min_length=1, max_length=20000)
     history: list[dict] = Field(default_factory=list, max_length=20)
+    turn_ledger: list[dict] = Field(default_factory=list, max_length=6)
     previous_files: list[GeneratedFile] = Field(default_factory=list)
+    candidate_files: list[GeneratedFile] = Field(default_factory=list)
+    candidate_feedback: list[str] = Field(default_factory=list)
+    candidate_review_summary: str = ""
+    candidate_snapshot_id: str | None = None
+    approved_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
+    candidate_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
+    last_run_status: str | None = None
     pending_clarification: str | None = None
     route: RouteOutput | None = None
     plan: PlanOutput | None = None

@@ -13,12 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .access import LoginRejected, accept_invitation, authenticate_password, guest_subject, read_session, sign_session
-from .db import Base, Conversation, FileVersion, Message, Run, SessionLocal, Trace, engine, now
+from .db import Base, Conversation, FileVersion, Message, Run, SessionLocal, Trace, engine, ensure_sqlite_compatibility, now
 from .service import claim_next, owned_conversation, owned_run, owner_hash, process_run, public_run
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ async def lifespan(_app):
             raise RuntimeError("Production requires a frontend index.html")
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
+        ensure_sqlite_compatibility(engine)
     task = asyncio.create_task(worker_loop())
     try:
         yield
@@ -137,6 +139,7 @@ def auth(request: Request, authorization: str = Header(default="")):
 
 class MessageIn(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class LoginIn(BaseModel):
@@ -269,6 +272,40 @@ def send_message(conversation_id: str, body: MessageIn, request: Request,
                  owner: str = Depends(auth), db: Session = Depends(db_session)):
     if not owned_conversation(db, conversation_id, owner):
         raise HTTPException(404, "Conversación no encontrada")
+    request_hash = hashlib.sha256(body.content.encode("utf-8")).hexdigest()
+
+    def prior_response():
+        prior = db.scalar(select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.client_message_id == body.client_message_id,
+        ))
+        if prior is None:
+            return None
+        if prior.request_hash != request_hash:
+            raise HTTPException(409, "Ese identificador de mensaje ya se usó con otro contenido")
+        original = db.scalar(select(Run).where(Run.message_id == prior.id))
+        if original is None:
+            raise HTTPException(503, "El mensaje aún se está registrando; inténtalo de nuevo")
+        return {"run_id": original.id, "status": original.status}
+
+    message = None
+    if body.client_message_id is not None:
+        prior = prior_response()
+        if prior is not None:
+            return prior
+        # Flush the unique key before rate checks. Concurrent retries then wait for
+        # the first transaction and return its run, even when the quota is full.
+        message = Message(conversation_id=conversation_id, role="user", content=body.content,
+                          client_message_id=body.client_message_id, request_hash=request_hash)
+        db.add(message)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            prior = prior_response()
+            if prior is not None:
+                return prior
+            raise HTTPException(503, "No se pudo registrar el mensaje; inténtalo de nuevo")
     since = now() - timedelta(hours=1)
     count = db.scalar(select(func.count(Run.id)).join(Conversation).where(Conversation.owner_hash == owner, Run.created_at >= since))
     is_guest = settings.auth_mode == "supabase" and request.state.access_role == "guest"
@@ -287,9 +324,10 @@ def send_message(conversation_id: str, body: MessageIn, request: Request,
         Conversation.owner_hash == owner, Run.status.in_(["queued", "running"])))
     if in_flight >= (1 if is_guest else settings.max_queued_runs_per_owner):
         raise HTTPException(429, "Demasiados trabajos pendientes")
-    message = Message(conversation_id=conversation_id, role="user", content=body.content)
-    db.add(message)
-    db.flush()
+    if message is None:
+        message = Message(conversation_id=conversation_id, role="user", content=body.content)
+        db.add(message)
+        db.flush()
     run = Run(conversation_id=conversation_id, message_id=message.id)
     db.add(run)
     db.commit()
@@ -311,6 +349,13 @@ def retry_run(run_id: str, owner: str = Depends(auth), db: Session = Depends(db_
         raise HTTPException(404, "Ejecución no encontrada")
     if run.status != "paused":
         raise HTTPException(409, "Solo se puede reintentar un trabajo pausado")
+    later = db.scalar(select(Run.id).where(
+        Run.conversation_id == run.conversation_id,
+        or_(Run.created_at > run.created_at,
+            and_(Run.created_at == run.created_at, Run.id > run.id)),
+    ).limit(1))
+    if later:
+        raise HTTPException(409, "Hay trabajos posteriores en esta conversación; vuelve a enviar la petición")
     run.status = "queued"
     run.error = None
     run.result = None

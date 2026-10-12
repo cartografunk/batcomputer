@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=3">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=4">
 </head>
 <body>
   <header class="site-header">
@@ -47,7 +47,11 @@
       <section class="panel chat-panel" aria-labelledby="chat-heading">
         <div class="panel-head">
           <div><p class="panel-kicker">01 / Conversación</p><h2 id="chat-heading">Mesa de trabajo</h2></div>
-          <button class="button button-outline" id="new" type="button">Nueva conversación</button>
+          <div class="conversation-actions">
+            <label class="visually-hidden" for="history-picker">Historial de conversaciones</label>
+            <select id="history-picker" aria-label="Abrir conversación anterior"><option value="">Abrir conversación anterior</option></select>
+            <button class="button button-outline" id="new" type="button">Nueva conversación</button>
+          </div>
         </div>
         <p id="conversation"></p>
         <div id="messages" aria-live="polite">
@@ -80,28 +84,44 @@
     <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
   </main>
 <script>
-const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null;
+const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,pendingSend=null,sending=false;
 const inviteParams=new URLSearchParams(location.hash.slice(1));let inviteToken=inviteParams.get('type')==='invite'?inviteParams.get('access_token'):null;
 if(inviteToken){history.replaceState(null,'',location.pathname+location.search);document.querySelector('#login-form').hidden=true;document.querySelector('#invite-form').hidden=false;document.querySelector('#guest-login').hidden=true;document.querySelector('#access-divider').hidden=true}
 function showAccess(session){const signedIn=session?.authenticated||session?.status==='ready';accessPanel.hidden=!!signedIn;workspace.hidden=!signedIn;logoutButton.hidden=!session?.authenticated;if(!signedIn){streamController?.abort();conversationId=null;lastRunId=null}logoutButton.textContent=session?.email?'Salir · '+session.email:'Salir'}
 function ensureSession(){if(!sessionReady)sessionReady=fetch('/api/session',{credentials:'same-origin'}).then(response=>{if(!response.ok)throw Error('No se pudo consultar la sesión');return response.json()}).then(session=>{showAccess(session);if(session.authenticated===false)throw Error('Inicia sesión para continuar');return session}).catch(error=>{sessionReady=null;throw error});return sessionReady}
 const api=async(path,options={})=>{await ensureSession();let r=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok){if(r.status===401){sessionReady=null;showAccess(null)}throw Error((await r.json()).detail||r.statusText)}return r.json()};
-async function enter(path,body){const label=document.querySelector('#access-status');label.textContent='Conectando…';try{const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||'No se pudo entrar');sessionReady=Promise.resolve(data);showAccess(data);label.textContent='';document.querySelector('#login-password').value='';document.querySelector('#invite-password').value='';await restoreConversation();return true}catch(error){label.textContent=error.message;return false}}
+async function enter(path,body){const label=document.querySelector('#access-status');label.textContent='Conectando…';try{const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||'No se pudo entrar');sessionReady=Promise.resolve(data);showAccess(data);resetConversation();label.textContent='';document.querySelector('#login-password').value='';document.querySelector('#invite-password').value='';await refreshHistory();return true}catch(error){label.textContent=error.message;return false}}
 document.querySelector('#login-form').onsubmit=event=>{event.preventDefault();enter('/api/auth/login',{email:document.querySelector('#login-email').value,password:document.querySelector('#login-password').value})};
 document.querySelector('#invite-form').onsubmit=async event=>{event.preventDefault();if(await enter('/api/auth/accept-invite',{access_token:inviteToken,password:document.querySelector('#invite-password').value}))inviteToken=null};
 document.querySelector('#guest-login').onclick=()=>enter('/api/auth/guest',{});
-logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});sessionReady=null;showAccess(null);messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#traces').replaceChildren();showFiles([]);preview.hidden=true;preview.srcdoc=''};
-ensureSession().then(()=>restoreConversation()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
+logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});sessionReady=null;showAccess(null);resetConversation();historyPicker.replaceChildren(new Option('Abrir conversación anterior',''))};
+ensureSession().then(()=>refreshHistory()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
-async function restoreConversation(){
+function resetConversation(){
+  viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
+  messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
+  document.querySelector('#traces').replaceChildren();showFiles([]);preview.hidden=true;preview.srcdoc='';
+  previewNote.textContent='Disponible cuando se aprueba una entrega HTML.';retryButton.hidden=true;status.textContent='';
+}
+async function refreshHistory(){
   const list=await fetch('/api/conversations',{credentials:'same-origin'});
-  if(!list.ok||conversationId)return;
-  const conversations=await list.json();if(!conversations.length)return;
-  const response=await fetch('/api/conversations/'+conversations[0].id,{credentials:'same-origin'});
-  if(!response.ok||conversationId)return;
-  const saved=await response.json();conversationId=saved.id;
+  if(!list.ok)return;
+  const selected=conversationId,conversations=await list.json();
+  historyPicker.replaceChildren(new Option('Abrir conversación anterior',''));
+  for(const item of conversations){
+    const date=new Date(item.created_at).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'});
+    historyPicker.add(new Option(date+' · '+item.id.slice(0,8),item.id));
+  }
+  historyPicker.value=selected||'';
+}
+async function openConversation(id){
+  const generation=++viewGeneration;streamController?.abort();pendingSend=null;
+  const response=await fetch('/api/conversations/'+encodeURIComponent(id),{credentials:'same-origin'});
+  if(!response.ok)throw Error('No se pudo abrir la conversación');
+  if(generation!==viewGeneration)return;
+  const saved=await response.json();if(generation!==viewGeneration)return;conversationId=saved.id;
   document.querySelector('#conversation').textContent='Conversación: '+saved.id;
   messages.replaceChildren(emptyTemplate.cloneNode(true));
   for(const message of saved.messages)bubble(message.role,message.content);
@@ -110,11 +130,14 @@ async function restoreConversation(){
   status.textContent=run.status==='queued'?'En cola…':run.status==='running'?'Procesando…':run.status;
   retryButton.hidden=run.status!=='paused';
   const filesResponse=await fetch('/api/runs/'+run.id+'/files',{credentials:'same-origin'});
-  if(filesResponse.ok){const files=await filesResponse.json();showFiles(files);showPreview(files,run)}
+  if(generation!==viewGeneration)return;
+  if(filesResponse.ok){const files=await filesResponse.json();if(generation!==viewGeneration)return;showFiles(files);showPreview(files,run)}
   const tracesResponse=await fetch('/api/runs/'+run.id+'/traces',{credentials:'same-origin'});
-  if(tracesResponse.ok){document.querySelector('#traces').replaceChildren();for(const trace of await tracesResponse.json())addTrace({node:trace.stage[0].toUpperCase()+trace.stage.slice(1),status:trace.output?.summary||trace.error||'Completado'})}
-  if(['queued','running'].includes(run.status))watchRun(run.id);
+  if(generation!==viewGeneration)return;
+  if(tracesResponse.ok){const traces=await tracesResponse.json();if(generation!==viewGeneration)return;document.querySelector('#traces').replaceChildren();for(const trace of traces)addTrace({node:trace.stage[0].toUpperCase()+trace.stage.slice(1),status:trace.output?.summary||trace.error||'Completado'})}
+  if(['queued','running'].includes(run.status))watchRun(run.id,saved.id,generation);
 }
+historyPicker.onchange=async()=>{const id=historyPicker.value;if(!id){resetConversation();return}try{await openConversation(id)}catch(error){historyPicker.value=conversationId||'';status.textContent=error.message}};
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
   preview.hidden=true;preview.srcdoc='';
@@ -129,8 +152,8 @@ function showPreview(files,run){
   preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   preview.hidden=false;previewNote.textContent='Iframe aislado: scripts locales permitidos; recursos externos bloqueados.';
 }
-document.querySelector('#new').onclick=async()=>{try{let c=await api('/api/conversations',{method:'POST'});conversationId=c.id;streamController?.abort();messages.replaceChildren(emptyTemplate.cloneNode(true));preview.hidden=true;preview.srcdoc='';retryButton.hidden=true;document.querySelector('#conversation').textContent='Conversación: '+c.id;status.textContent='';document.querySelector('#traces').replaceChildren();showFiles([])}catch(e){status.textContent=e.message}};
-async function watchRun(runId){lastRunId=runId;retryButton.hidden=true;streamTraces(conversationId,runId);while(true){await new Promise(resolve=>setTimeout(resolve,900));const result=await api('/api/runs/'+runId);if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
+document.querySelector('#new').onclick=resetConversation;
+async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
 retryButton.onclick=async()=>{try{const run=await api('/api/runs/'+lastRunId+'/retry',{method:'POST'});await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
 const composer=document.querySelector('#content');
 composer.addEventListener('keydown',event=>{
@@ -144,5 +167,5 @@ composer.addEventListener('keydown',event=>{
     if(!event.repeat)document.querySelector('#send').requestSubmit();
   }
 });
-document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content)return;try{if(!conversationId)await document.querySelector('#new').onclick();if(!conversationId)return;const run=await api('/api/conversations/'+conversationId+'/messages',{method:'POST',body:JSON.stringify({content})});bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();status.textContent='En cola…';await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
+document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content||sending)return;const generation=viewGeneration;if(!pendingSend||pendingSend.content!==content||pendingSend.conversationId!==conversationId)pendingSend={content,conversationId,id:crypto.randomUUID()};const attempt=pendingSend;sending=true;try{if(!conversationId){const created=await api('/api/conversations',{method:'POST'});if(generation!==viewGeneration)return;conversationId=created.id;attempt.conversationId=created.id;document.querySelector('#conversation').textContent='Conversación: '+created.id;refreshHistory().catch(()=>{})}const id=conversationId;if(generation!==viewGeneration)return;const run=await api('/api/conversations/'+id+'/messages',{method:'POST',body:JSON.stringify({content,client_message_id:attempt.id})});if(pendingSend===attempt)pendingSend=null;if(generation!==viewGeneration)return;bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();status.textContent='En cola…';sending=false;await watchRun(run.run_id,id,generation)}catch(error){if(generation===viewGeneration)status.textContent=error.message}finally{sending=false}};
 </script></body></html>
