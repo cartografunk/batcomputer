@@ -106,7 +106,7 @@ textarea::placeholder { color: #857992; opacity: 1; }
 #example-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 #example-section[hidden] { display: none; }
 #example-section p { color: var(--muted); font-size: 13px; }
-#example { display: block; width: 100%; height: 480px; border: 1px solid var(--line); background: #172c3e; }
+#example { display: block; width: 100%; height: 680px; border: 1px solid var(--line); background: #172c3e; }
 #example-section a { color: var(--purple-bright); }
 .site-footer { padding: 24px 0 0; display: flex; justify-content: space-between; gap: 20px; color: #877c97; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 @media (max-width: 900px) { .workspace { grid-template-columns: 1fr; } .chat-panel { min-height: 620px; } .sidebar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); } .trace-panel { grid-column: 1 / -1; } }
