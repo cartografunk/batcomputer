@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=9">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=10">
 </head>
 <body>
   <header class="site-header">
@@ -81,7 +81,7 @@
           <pre id="files"></pre>
           <p id="copy-status" role="status" aria-live="polite" hidden></p>
           <div id="preview-section" hidden>
-            <h2>Vista previa</h2>
+            <div class="preview-title"><h2>Vista previa</h2><button class="button button-outline" id="expand-preview" type="button">Ampliar ↗</button></div>
             <p id="preview-note">Iframe aislado: scripts locales permitidos; recursos externos bloqueados.</p>
             <iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
           </div>
@@ -96,6 +96,9 @@
     </div>
     <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
   </main>
+  <dialog id="preview-dialog" aria-labelledby="preview-dialog-title">
+    <div class="preview-dialog-head"><h2 id="preview-dialog-title">Vista previa ampliada</h2><button class="button button-outline" id="close-preview" type="button">Cerrar ×</button></div>
+  </dialog>
 <script>
 const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,pendingSend=null,sending=false;
 const inviteParams=new URLSearchParams(location.hash.slice(1));let inviteToken=inviteParams.get('type')==='invite'?inviteParams.get('access_token'):null;
@@ -133,6 +136,7 @@ function showFiles(files){
   };
 }
 function resetConversation(){
+  closePreviewDialog();
   viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
   document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';showExample(null);
@@ -174,6 +178,7 @@ async function openConversation(id){
 historyPicker.onchange=async()=>{const id=historyPicker.value;if(!id){resetConversation();return}try{await openConversation(id)}catch(error){historyPicker.value=conversationId||'';status.textContent=error.message}};
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
+  closePreviewDialog();
   const previewSection=document.querySelector('#preview-section');
   const clearPreview=()=>{preview.srcdoc='';preview.hidden=true;previewSection.hidden=true};
   if(run.status!=='approved'){clearPreview();return}
@@ -190,6 +195,21 @@ function showPreview(files,run){
   void preview.offsetHeight;
   preview.srcdoc=markup;
 }
+const previewDialog=document.querySelector('#preview-dialog');
+function closePreviewDialog(){if(previewDialog.open)previewDialog.close()}
+document.querySelector('#expand-preview').onclick=()=>{
+  if(!preview.srcdoc)return;
+  const large=document.createElement('iframe');
+  large.id='preview-large';large.title='Vista previa ampliada de código generado';
+  large.setAttribute('sandbox','allow-scripts');large.setAttribute('referrerpolicy','no-referrer');
+  previewDialog.append(large);
+  previewDialog.showModal();
+  void large.offsetHeight;
+  large.srcdoc=preview.srcdoc;
+};
+document.querySelector('#close-preview').onclick=closePreviewDialog;
+previewDialog.onclick=event=>{if(event.target===previewDialog)closePreviewDialog()};
+previewDialog.addEventListener('close',()=>previewDialog.querySelector('iframe')?.remove());
 function showExample(run,request=''){
   const section=document.querySelector('#example-section'),frame=document.querySelector('#example');
   const visible=['technical_error','exhausted'].includes(run?.status)&&/\bflappy(?:\s+bird)?\b/i.test(request);
