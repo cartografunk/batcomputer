@@ -74,7 +74,7 @@
           <p class="panel-kicker">03 / Entrega</p>
           <div class="artifact-title">
             <h2>Código generado</h2>
-            <button class="button button-outline" id="copy-all" type="button" hidden>Copiar todo</button>
+            <button class="button button-outline" id="copy-all" type="button" hidden>Copiar código</button>
           </div>
           <p id="no-files">Sin archivos todavía.</p>
           <select id="file-picker" aria-label="Archivo generado" hidden></select>
@@ -105,7 +105,27 @@ logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',cre
 ensureSession().then(()=>refreshHistory()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
-function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files'),copyButton=document.querySelector('#copy-all'),copyStatus=document.querySelector('#copy-status');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);picker.hidden=!snapshot.length;copyButton.hidden=!snapshot.length;copyStatus.hidden=true;copyStatus.textContent='';document.querySelector('#no-files').hidden=!!snapshot.length;if(!snapshot.length){out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange();copyButton.onclick=async()=>{const text=snapshot.length===1?snapshot[0].content:snapshot.map(file=>'===== '+file.path+' =====\n'+file.content).join('\n\n');try{await navigator.clipboard.writeText(text);copyStatus.textContent=snapshot.length===1?'Archivo copiado.':snapshot.length+' archivos copiados.'}catch{copyStatus.textContent='No se pudo copiar. Revisa los permisos del navegador.'}copyStatus.hidden=false}}
+function showFiles(files){
+  const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');
+  const copyButton=document.querySelector('#copy-all'),copyStatus=document.querySelector('#copy-status');
+  picker.replaceChildren();
+  const attempt=Math.max(0,...files.map(file=>file.attempt));
+  const snapshot=files.filter(file=>file.attempt===attempt);
+  const codeFiles=snapshot.filter(file=>!/(^|\/)README\.md$/i.test(file.path));
+  picker.hidden=!snapshot.length;copyButton.hidden=!codeFiles.length;
+  copyStatus.hidden=true;copyStatus.textContent='';
+  document.querySelector('#no-files').hidden=!!snapshot.length;
+  if(!snapshot.length){out.textContent='';return}
+  snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));
+  picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';
+  picker.value='0';picker.onchange();
+  copyButton.onclick=async()=>{
+    const text=codeFiles.length===1?codeFiles[0].content:codeFiles.map(file=>'===== '+file.path+' =====\n'+file.content).join('\n\n');
+    try{await navigator.clipboard.writeText(text);copyStatus.textContent=codeFiles.length===1?'Código copiado.':codeFiles.length+' archivos de código copiados.'}
+    catch{copyStatus.textContent='No se pudo copiar. Revisa los permisos del navegador.'}
+    copyStatus.hidden=false;
+  };
+}
 function resetConversation(){
   viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
