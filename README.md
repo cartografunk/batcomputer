@@ -72,15 +72,19 @@ flowchart LR
   Planner -->|ticket| Coder
   Coder --> Tester[Tester sintáctico; E2B opcional]
   Tester --> Reviewer
-  Reviewer -->|rechazo y quedan intentos| Coder
+  Reviewer -->|"rechazo y quedan intentos (máx. `MAX_CODER_ATTEMPTS`, 1–3, por defecto 3)"| Coder
   Reviewer -->|aprobado o límite| Documenter
-  Documenter --> Approved[Aprobado o agotado]
+  Documenter -->|aprobado| Approved[Aprobado]
+  Documenter -->|agotado| Exhausted["Agotado: candidato guardado, nunca aprobado"]
+  Documenter --> Snapshot["Snapshot de la entrega"]
   Planner -->|error| Failed[Error técnico]
   Coder -->|error| Failed
   Reviewer -->|error| Failed
   Answer --> DB
   Clarify --> DB
   Approved --> DB
+  Exhausted --> DB
+  Snapshot --> DB
   Failed --> DB
 ```
 
@@ -131,3 +135,4 @@ Consulte [Dominio personalizado y DNS](docs/DOMAIN.md) para la configuración ap
 - [Dominio personalizado y DNS](docs/DOMAIN.md)
 - [Criterios de aceptación de la prueba](docs/ACCEPTANCE.md)
 - [Evaluación y trazas](docs/EVALS.md)
+- [Resumen](docs/RESUMEN.md)
