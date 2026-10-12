@@ -26,7 +26,7 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_expo
 
 from .agents import PROMPTS, AgentFailure, ModelProvider, TemporaryProviderFailure
 from .config import Settings
-from .state import AnswerOutput, CodeOutput, PlanOutput, ReviewOutput, RouteOutput
+from .state import AnswerOutput, CodeOutput, PlanOutput, ReviewOutput, RouteOutput, azure_strict_schema
 
 ROLE_SCHEMAS: dict[str, type[BaseModel]] = {
     "router": RouteOutput,
@@ -48,23 +48,7 @@ def azure_output_schema(role: str) -> dict:
 
     Length limits and custom validators remain enforced locally after parsing.
     """
-    allowed = {"type", "properties", "required", "items", "anyOf", "$defs", "$ref",
-               "enum", "const", "description", "additionalProperties"}
-
-    def clean(value):
-        if isinstance(value, list):
-            return [clean(item) for item in value]
-        if not isinstance(value, dict):
-            return value
-        result = {key: ({name: clean(schema) for name, schema in item.items()}
-                        if key in ("properties", "$defs") else clean(item))
-                  for key, item in value.items() if key in allowed}
-        if result.get("type") == "object":
-            result["additionalProperties"] = False
-            result["required"] = list(result.get("properties", {}))
-        return result
-
-    return {"title": ROLE_SCHEMAS[role].__name__, **clean(ROLE_SCHEMAS[role].model_json_schema())}
+    return {"title": ROLE_SCHEMAS[role].__name__, **azure_strict_schema(ROLE_SCHEMAS[role])}
 
 
 @dataclass(frozen=True)

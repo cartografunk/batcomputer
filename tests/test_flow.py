@@ -389,6 +389,17 @@ def test_malformed_or_timeout(store, config, bad):
     assert "API" not in run.error
 
 
+def test_coder_schema_failure_records_field_without_model_content(store, config):
+    _, run_id = queued(store)
+    run = execute(store, config, run_id, FakeProvider([PLAN, {"summary": "private generated text"}]))
+    assert run.status == "technical_error"
+    assert run.error == "El modelo devolvió una respuesta con estructura inválida."
+    with store() as db:
+        trace = db.scalar(select(Trace).where(Trace.run_id == run_id, Trace.stage == "coder"))
+        assert "files:missing" in trace.error
+        assert "private generated text" not in trace.error
+
+
 def test_followup_uses_previous_code(store, config):
     conversation, first = queued(store)
     execute(store, config, first, FakeProvider([PLAN, CODE, YES]))
@@ -828,6 +839,33 @@ def test_azure_responses_uses_shared_endpoint_and_extracts_output(monkeypatch):
     assert seen["json"]["text"] == {"format": {"type": "json_object"}}
     assert seen["json"]["input"][0]["role"] == "system"
     assert seen["json"]["max_output_tokens"] == 16384
+
+
+def test_azure_responses_coder_requests_strict_file_schema(monkeypatch):
+    import httpx
+    import app.agents as agents
+
+    seen = {}
+    class ResponsesClient:
+        def __init__(self, **_): pass
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def post(self, url, **kwargs):
+            seen.update(kwargs)
+            data = {"status": "completed", "output_text":
+                    '{"summary":"Game","files":[{"path":"index.html","content":"<canvas></canvas>"}]}'}
+            return httpx.Response(200, json=data, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(agents.httpx, "Client", ResponsesClient)
+    provider = ModelProvider(Settings(model_mode="azure_responses", model_api_key="azure-test",
+        azure_openai_endpoint="https://example.openai.azure.com",
+        azure_openai_deployment="gpt-5-mini", azure_openai_api_version="2025-04-01-preview"))
+    assert provider.call("coder", {"plan": {}})["files"][0]["path"] == "index.html"
+    fmt = seen["json"]["text"]["format"]
+    assert (fmt["type"], fmt["name"], fmt["strict"]) == ("json_schema", "CodeOutput", True)
+    assert fmt["schema"]["required"] == ["summary", "files"]
+    assert fmt["schema"]["additionalProperties"] is False
+    assert fmt["schema"]["$defs"]["GeneratedFile"]["required"] == ["path", "content"]
 
 
 def test_provider_retries_persist_separately(store, config):

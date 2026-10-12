@@ -12,7 +12,7 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_expo
 from .config import Settings
 from .context import accumulated_criteria, base_files, changes_vs_base, prior_criteria, uses_candidate
 from .scout import GitHubScout
-from .state import AnswerOutput, CodeOutput, PlanOutput, ReviewOutput, RouteOutput
+from .state import AnswerOutput, CodeOutput, PlanOutput, ReviewOutput, RouteOutput, azure_strict_schema
 
 
 class AgentFailure(Exception):
@@ -94,7 +94,9 @@ class ModelProvider:
             body = {
                 "model": model_name,
                 "input": body["messages"],
-                "text": {"format": {"type": "json_object"}},
+                "text": {"format": ({"type": "json_schema", "name": "CodeOutput",
+                                      "schema": azure_strict_schema(CodeOutput), "strict": True}
+                                     if role == "coder" else {"type": "json_object"})},
                 "max_output_tokens": self.settings.azure_max_completion_tokens,
             }
         elif use_azure:
@@ -218,7 +220,12 @@ def build_graph(provider, settings: Settings, record, validator, researcher=None
             return output
         except (ValidationError, AgentFailure, ValueError) as exc:
             public_error = str(exc) if isinstance(exc, AgentFailure) else "El modelo devolvió una respuesta con estructura inválida."
-            record(role, attempt, payload, {}, public_error, int((time.monotonic() - start) * 1000))
+            trace_error = public_error
+            if isinstance(exc, ValidationError):
+                fields = [".".join(map(str, item["loc"])) + ":" + item["type"]
+                          for item in exc.errors(include_input=False)[:3]]
+                trace_error += " Campos: " + ", ".join(fields)
+            record(role, attempt, payload, {}, trace_error, int((time.monotonic() - start) * 1000))
             if isinstance(exc, TemporaryProviderFailure):
                 raise TemporaryProviderFailure(public_error) from exc
             raise AgentFailure(public_error) from exc

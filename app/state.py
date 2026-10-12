@@ -14,6 +14,30 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def azure_strict_schema(model: type[BaseModel]) -> dict:
+    """Use the JSON Schema subset accepted by Azure structured outputs.
+
+    Pydantic's length limits and custom validators still run after parsing.
+    """
+    allowed = {"type", "properties", "required", "items", "anyOf", "$defs", "$ref",
+               "enum", "const", "description", "additionalProperties"}
+
+    def clean(value):
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {key: ({name: clean(schema) for name, schema in item.items()}
+                        if key in ("properties", "$defs") else clean(item))
+                  for key, item in value.items() if key in allowed}
+        if result.get("type") == "object":
+            result["additionalProperties"] = False
+            result["required"] = list(result.get("properties", {}))
+        return result
+
+    return clean(model.model_json_schema())
+
+
 class RouteOutput(StrictModel):
     kind: Literal["NEW_TICKET", "MODIFICATION", "QUESTION"]
     reason: str = Field(min_length=1, max_length=500)
