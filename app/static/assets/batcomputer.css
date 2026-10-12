@@ -106,8 +106,9 @@ textarea::placeholder { color: #857992; opacity: 1; }
 #preview-note { margin: 3px 0 14px; }
 #preview { display: block; width: 100%; height: 720px; background: #fff; border: 1px solid var(--line); }
 #preview[hidden], #retry[hidden] { display: none; }
-#preview-dialog { width: min(1100px,96vw); height: min(900px,94vh); max-width: none; max-height: none; padding: 16px; border: 1px solid var(--purple); background: var(--surface); color: var(--text); box-shadow: 0 24px 90px rgba(0,0,0,.65); }
-#preview-dialog[open] { display: flex; flex-direction: column; gap: 12px; }
+#preview-dialog { width: min(1100px,96vw); height: min(900px,calc(100dvh - 12px)); max-width: none; max-height: none; padding: 8px; border: 1px solid var(--purple); background: var(--surface); color: var(--text); box-shadow: 0 24px 90px rgba(0,0,0,.65); }
+#preview-dialog[open] { display: flex; flex-direction: column; gap: 6px; }
+#preview-dialog .button { min-height: 32px; }
 #preview-dialog::backdrop { background: rgba(3,3,10,.84); backdrop-filter: blur(8px); }
 #preview-large { display: block; flex: 1; min-height: 0; width: 100%; border: 1px solid var(--line); background: #fff; }
 #example-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
