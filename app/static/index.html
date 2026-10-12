@@ -187,12 +187,12 @@ function showPreview(files,run){
   const js=snapshot.filter(file=>file.path.endsWith('.js')).map(file=>'<script>'+file.content.replace(/<\/script/gi,'<\\/script')+'<'+'/script>').join('');
   const markup='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   previewSection.hidden=false;preview.hidden=false;
-  requestAnimationFrame(()=>{
+  setTimeout(()=>{
     if(generation!==previewLoadGeneration||preview.hidden)return;
     // Let responsive generated code measure a laid-out iframe on its first run.
     void preview.offsetHeight;
     preview.srcdoc=markup;
-  });
+  },0);
 }
 function showExample(run,request=''){
   const section=document.querySelector('#example-section'),frame=document.querySelector('#example');
