@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=5">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=6">
 </head>
 <body>
   <header class="site-header">
@@ -68,16 +68,19 @@
       <aside class="sidebar" aria-label="Resultados y actividad">
         <section class="panel side-section trace-panel">
           <p class="panel-kicker">02 / Proceso</p>
-          <details open><summary>Trazas de agentes</summary><p>Sigue el progreso en tiempo real. La respuesta final aparece en el chat.</p><ol id="traces" aria-live="polite"></ol></details>
+          <details open><summary>Trazas de agentes</summary><p>Sigue el progreso en tiempo real.</p><ol id="traces" aria-live="polite"></ol></details>
         </section>
         <section class="panel side-section artifact-panel">
           <p class="panel-kicker">03 / Entrega</p>
           <h2>Código generado</h2>
-          <select id="file-picker" aria-label="Archivo generado"><option>Sin archivos</option></select>
+          <p id="no-files">Sin archivos todavía.</p>
+          <select id="file-picker" aria-label="Archivo generado" hidden></select>
           <pre id="files"></pre>
-          <h2>Vista previa</h2>
-          <p id="preview-note">Disponible cuando se aprueba una entrega HTML.</p>
-          <iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
+          <div id="preview-section" hidden>
+            <h2>Vista previa</h2>
+            <p id="preview-note">Iframe aislado: scripts locales permitidos; recursos externos bloqueados.</p>
+            <iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
+          </div>
         </section>
       </aside>
     </div>
@@ -98,12 +101,12 @@ logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',cre
 ensureSession().then(()=>refreshHistory()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
-function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);if(!snapshot.length){picker.add(new Option('Sin archivos',''));out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
+function showFiles(files){const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');picker.replaceChildren();const attempt=Math.max(0,...files.map(file=>file.attempt));const snapshot=files.filter(file=>file.attempt===attempt);picker.hidden=!snapshot.length;document.querySelector('#no-files').hidden=!!snapshot.length;if(!snapshot.length){out.textContent='';return}snapshot.forEach((file,index)=>picker.add(new Option(file.path,String(index))));picker.onchange=()=>out.textContent=snapshot[Number(picker.value)]?.content||'';picker.value='0';picker.onchange()}
 function resetConversation(){
   viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
-  document.querySelector('#traces').replaceChildren();showFiles([]);preview.hidden=true;preview.srcdoc='';
-  previewNote.textContent='Disponible cuando se aprueba una entrega HTML.';retryButton.hidden=true;status.textContent='';
+  document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';
+  retryButton.hidden=true;status.textContent='';
 }
 async function refreshHistory(){
   const list=await fetch('/api/conversations',{credentials:'same-origin'});
@@ -140,17 +143,18 @@ async function openConversation(id){
 historyPicker.onchange=async()=>{const id=historyPicker.value;if(!id){resetConversation();return}try{await openConversation(id)}catch(error){historyPicker.value=conversationId||'';status.textContent=error.message}};
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
-  preview.hidden=true;preview.srcdoc='';
-  if(run.status!=='approved'){previewNote.textContent='La vista previa requiere HTML aprobado.';return}
+  const previewSection=document.querySelector('#preview-section');
+  previewSection.hidden=true;preview.hidden=true;preview.srcdoc='';
+  if(run.status!=='approved')return;
   const attempt=Math.max(0,...files.map(file=>file.attempt));
   const snapshot=files.filter(file=>file.attempt===attempt);
   const html=snapshot.find(file=>file.path.endsWith('.html'));
-  if(!html){previewNote.textContent='Esta entrega no contiene HTML.';return}
+  if(!html)return;
   const policy="default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data: blob:; media-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; navigate-to 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
   const css=snapshot.filter(file=>file.path.endsWith('.css')).map(file=>'<style>'+file.content.replace(/<\/style/gi,'<\\/style')+'<'+'/style>').join('');
   const js=snapshot.filter(file=>file.path.endsWith('.js')).map(file=>'<script>'+file.content.replace(/<\/script/gi,'<\\/script')+'<'+'/script>').join('');
   preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
-  preview.hidden=false;previewNote.textContent='Iframe aislado: scripts locales permitidos; recursos externos bloqueados.';
+  previewSection.hidden=false;preview.hidden=false;
 }
 document.querySelector('#new').onclick=resetConversation;
 async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
