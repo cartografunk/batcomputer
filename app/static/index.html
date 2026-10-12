@@ -184,8 +184,8 @@ function showPreview(files,run){
   const policy="default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data: blob:; media-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; navigate-to 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
   const css=snapshot.filter(file=>file.path.endsWith('.css')).map(file=>'<style>'+file.content.replace(/<\/style/gi,'<\\/style')+'<'+'/style>').join('');
   const js=snapshot.filter(file=>file.path.endsWith('.js')).map(file=>'<script>'+file.content.replace(/<\/script/gi,'<\\/script')+'<'+'/script>').join('');
-  preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   previewSection.hidden=false;preview.hidden=false;
+  preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
 }
 function showExample(run,request=''){
   const section=document.querySelector('#example-section'),frame=document.querySelector('#example');
