@@ -97,7 +97,7 @@
     <footer class="site-footer"><span>Cartografunk · Mapas pa' que se lo gocen</span><span>Batcomputer / IA multiagente</span></footer>
   </main>
 <script>
-const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,previewLoadGeneration=0,pendingSend=null,sending=false;
+const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,pendingSend=null,sending=false;
 const inviteParams=new URLSearchParams(location.hash.slice(1));let inviteToken=inviteParams.get('type')==='invite'?inviteParams.get('access_token'):null;
 if(inviteToken){history.replaceState(null,'',location.pathname+location.search);document.querySelector('#login-form').hidden=true;document.querySelector('#invite-form').hidden=false;document.querySelector('#guest-login').hidden=true;document.querySelector('#access-divider').hidden=true}
 function showAccess(session){const signedIn=session?.authenticated||session?.status==='ready';accessPanel.hidden=!!signedIn;workspace.hidden=!signedIn;logoutButton.hidden=!session?.authenticated;if(!signedIn){streamController?.abort();conversationId=null;lastRunId=null}logoutButton.textContent=session?.email?'Salir · '+session.email:'Salir'}
@@ -133,7 +133,7 @@ function showFiles(files){
   };
 }
 function resetConversation(){
-  viewGeneration++;previewLoadGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
+  viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
   document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';showExample(null);
   retryButton.hidden=true;status.textContent='';
@@ -175,24 +175,20 @@ historyPicker.onchange=async()=>{const id=historyPicker.value;if(!id){resetConve
 async function streamTraces(sessionId,runId){streamController?.abort();streamController=new AbortController();try{await ensureSession();const response=await fetch('/stream/'+sessionId+'?run_id='+encodeURIComponent(runId),{credentials:'same-origin',signal:streamController.signal});if(!response.ok)throw Error('No se pudieron abrir las trazas');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n\n'))>=0){const packet=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=packet.split('\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));if(packet.includes('event: trace'))addTrace(event)}}}}catch(error){if(error.name!=='AbortError')addTrace({node:'Conexión',status:error.message})}}
 function showPreview(files,run){
   const previewSection=document.querySelector('#preview-section');
-  const generation=++previewLoadGeneration;
-  previewSection.hidden=true;preview.hidden=true;preview.srcdoc='';
-  if(run.status!=='approved')return;
+  const clearPreview=()=>{preview.srcdoc='';preview.hidden=true;previewSection.hidden=true};
+  if(run.status!=='approved'){clearPreview();return}
   const attempt=Math.max(0,...files.map(file=>file.attempt));
   const snapshot=files.filter(file=>file.attempt===attempt);
   const html=snapshot.find(file=>file.path.endsWith('.html'));
-  if(!html)return;
+  if(!html){clearPreview();return}
   const policy="default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data: blob:; media-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; navigate-to 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
   const css=snapshot.filter(file=>file.path.endsWith('.css')).map(file=>'<style>'+file.content.replace(/<\/style/gi,'<\\/style')+'<'+'/style>').join('');
   const js=snapshot.filter(file=>file.path.endsWith('.js')).map(file=>'<script>'+file.content.replace(/<\/script/gi,'<\\/script')+'<'+'/script>').join('');
   const markup='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   previewSection.hidden=false;preview.hidden=false;
-  setTimeout(()=>{
-    if(generation!==previewLoadGeneration||preview.hidden)return;
-    // Let responsive generated code measure a laid-out iframe on its first run.
-    void preview.offsetHeight;
-    preview.srcdoc=markup;
-  },0);
+  // Responsive generated code must see the final iframe size on its first run.
+  void preview.offsetHeight;
+  preview.srcdoc=markup;
 }
 function showExample(run,request=''){
   const section=document.querySelector('#example-section'),frame=document.querySelector('#example');
