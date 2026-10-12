@@ -22,3 +22,12 @@ Este documento resume con palabras propias el enunciado facilitado para la prueb
 4. Confirmar que la URL pública, el chat y `/health` responden durante la entrevista. Probar Flappy Bird y el enlace de regreso a Cartografunk.
 
 La URL del sistema está publicada. La disponibilidad debe comprobarse de nuevo el día de la entrevista.
+
+## Verificación pública del 12 de octubre de 2026
+
+- `/health` y `/flappy` respondieron HTTP 200. Flappy Bird se inició en el navegador.
+- Un ticket de cupones con contrato y casos explícitos terminó `approved` en un intento y entregó `coupons.py`, pruebas y README. Las trazas incluyeron Router, Planner, Coder, Validator, Reviewer y Documenter.
+- En otro hilo, una calculadora terminó `approved`; la petición de agregar multiplicación también terminó `approved`. El segundo run tomó el snapshot anterior como base y su archivo final conservó `add` y `subtract` junto con `multiply`. Una pregunta posterior terminó `answered` sin archivos nuevos.
+- La validación de esas entregas fue `not_executed`: no hay `E2B_API_KEY` configurada. La aprobación del Reviewer no demuestra que las pruebas generadas se hayan ejecutado. El ticket inicial de cupones, menos específico, pidió aclaración; conviene mostrar también ese comportamiento durante la entrevista.
+
+Queda pendiente ejecutar y revisar el código generado en un sandbox real, repetir el ejemplo exacto del enunciado y confirmar de nuevo la disponibilidad el día de la entrevista.
