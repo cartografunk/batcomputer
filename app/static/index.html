@@ -85,6 +85,12 @@
             <p id="preview-note">Iframe aislado: scripts locales permitidos; recursos externos bloqueados.</p>
             <iframe id="preview" title="Vista previa de código generado" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
           </div>
+          <div id="example-section" hidden>
+            <h2>Ejemplo preparado</h2>
+            <p>Este juego ya estaba en Batcomputer. El intento de los agentes falló; el ejemplo no es código generado por esta conversación.</p>
+            <iframe id="example" title="Ejemplo preparado de Flappy Bird" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+            <p><a href="/testing" target="_blank" rel="noopener">Abrir el ejemplo en otra pestaña</a></p>
+          </div>
         </section>
       </aside>
     </div>
@@ -129,7 +135,7 @@ function showFiles(files){
 function resetConversation(){
   viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
-  document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';
+  document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';showExample(null);
   retryButton.hidden=true;status.textContent='';
 }
 async function refreshHistory(){
@@ -159,6 +165,7 @@ async function openConversation(id){
   const filesResponse=await fetch('/api/runs/'+run.id+'/files',{credentials:'same-origin'});
   if(generation!==viewGeneration)return;
   if(filesResponse.ok){const files=await filesResponse.json();if(generation!==viewGeneration)return;showFiles(files);showPreview(files,run)}
+  showExample(run,saved.messages.filter(message=>message.role==='user').at(-1)?.content||'');
   const tracesResponse=await fetch('/api/runs/'+run.id+'/traces',{credentials:'same-origin'});
   if(generation!==viewGeneration)return;
   if(tracesResponse.ok){const traces=await tracesResponse.json();if(generation!==viewGeneration)return;document.querySelector('#traces').replaceChildren();for(const trace of traces)addTrace({node:trace.stage[0].toUpperCase()+trace.stage.slice(1),status:trace.output?.summary||trace.error||'Completado'})}
@@ -180,8 +187,15 @@ function showPreview(files,run){
   preview.srcdoc='<!doctype html><meta http-equiv="Content-Security-Policy" content="'+policy+'">'+css+html.content+js;
   previewSection.hidden=false;preview.hidden=false;
 }
+function showExample(run,request=''){
+  const section=document.querySelector('#example-section'),frame=document.querySelector('#example');
+  const visible=['technical_error','exhausted'].includes(run?.status)&&/\bflappy(?:\s+bird)?\b/i.test(request);
+  section.hidden=!visible;
+  if(visible){if(!frame.getAttribute('src'))frame.src='/testing'}
+  else frame.removeAttribute('src');
+}
 document.querySelector('#new').onclick=resetConversation;
-async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
+async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);showExample(result,[...messages.querySelectorAll('.bubble.user')].at(-1)?.textContent||'');break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
 retryButton.onclick=async()=>{try{const run=await api('/api/runs/'+lastRunId+'/retry',{method:'POST'});await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
 const composer=document.querySelector('#content');
 composer.addEventListener('keydown',event=>{
@@ -195,5 +209,5 @@ composer.addEventListener('keydown',event=>{
     if(!event.repeat)document.querySelector('#send').requestSubmit();
   }
 });
-document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content||sending)return;const generation=viewGeneration;if(!pendingSend||pendingSend.content!==content||pendingSend.conversationId!==conversationId)pendingSend={content,conversationId,id:crypto.randomUUID()};const attempt=pendingSend;sending=true;try{if(!conversationId){const created=await api('/api/conversations',{method:'POST'});if(generation!==viewGeneration)return;conversationId=created.id;attempt.conversationId=created.id;document.querySelector('#conversation').textContent='Conversación: '+created.id;refreshHistory().catch(()=>{})}const id=conversationId;if(generation!==viewGeneration)return;const run=await api('/api/conversations/'+id+'/messages',{method:'POST',body:JSON.stringify({content,client_message_id:attempt.id})});if(pendingSend===attempt)pendingSend=null;if(generation!==viewGeneration)return;bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();status.textContent='En cola…';sending=false;await watchRun(run.run_id,id,generation)}catch(error){if(generation===viewGeneration)status.textContent=error.message}finally{sending=false}};
+document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content||sending)return;const generation=viewGeneration;if(!pendingSend||pendingSend.content!==content||pendingSend.conversationId!==conversationId)pendingSend={content,conversationId,id:crypto.randomUUID()};const attempt=pendingSend;sending=true;try{if(!conversationId){const created=await api('/api/conversations',{method:'POST'});if(generation!==viewGeneration)return;conversationId=created.id;attempt.conversationId=created.id;document.querySelector('#conversation').textContent='Conversación: '+created.id;refreshHistory().catch(()=>{})}const id=conversationId;if(generation!==viewGeneration)return;const run=await api('/api/conversations/'+id+'/messages',{method:'POST',body:JSON.stringify({content,client_message_id:attempt.id})});if(pendingSend===attempt)pendingSend=null;if(generation!==viewGeneration)return;bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();showExample(null);status.textContent='En cola…';sending=false;await watchRun(run.run_id,id,generation)}catch(error){if(generation===viewGeneration)status.textContent=error.message}finally{sending=false}};
 </script></body></html>

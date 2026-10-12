@@ -946,7 +946,7 @@ def test_health_and_provisional_pages(store, monkeypatch):
     monkeypatch.setattr(main, "SessionLocal", store)
     client = TestClient(main.app)
     assert client.get("/health").json() == {"status": "ok"}
-    assert "Flappy Bird" in client.get("/flappy").text
+    assert "Flappy Bird" in client.get("/testing").text
     page = client.get("/").text
     assert 'sandbox="allow-scripts"' in page
     assert "allow-same-origin" not in page

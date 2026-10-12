@@ -224,8 +224,8 @@ def logout(response: Response):
     return {"authenticated": False}
 
 
-@app.get("/flappy")
-def flappy():
+@app.get("/testing")
+def testing():
     return FileResponse(Path(__file__).parent / "static" / "flappy.html")
 
 

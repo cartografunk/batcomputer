@@ -15,7 +15,7 @@ El enlace **Batcomputer** de la portada de Cartografunk apunta al subdominio. La
 ## Verificación tras cambios
 
 1. Compruebe que Railway indique el despliegue como activo y que `/health` responda 200.
-2. Pruebe la interfaz, un ticket real y `/flappy` en el subdominio. El healthcheck comprueba la conexión SQL, pero no una llamada al proveedor de IA.
+2. Pruebe la interfaz, un ticket real y `/testing` en el subdominio. El healthcheck comprueba la conexión SQL, pero no una llamada al proveedor de IA.
 3. Si cambia el dominio, actualice `CORS_ORIGINS` en Railway y el enlace del sitio principal. El frontend y la API comparten origen; el enlace desde Cartografunk no requiere CORS.
 
 Publicar bajo `www.cartografunk.com/agentes` necesitaría un proxy de rutas en el hosting del sitio principal; no forma parte de esta configuración.
