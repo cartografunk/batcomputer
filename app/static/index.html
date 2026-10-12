@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080810">
   <meta name="description" content="Batcomputer, el laboratorio multiagente de Cartografunk para convertir tickets en código funcional.">
   <title>Batcomputer · Cartografunk</title>
-  <link rel="stylesheet" href="/assets/batcomputer.css?v=11">
+  <link rel="stylesheet" href="/assets/batcomputer.css?v=12">
 </head>
 <body>
   <header class="site-header">
@@ -59,6 +59,7 @@
             <h3>Salvemos <span>Ciudad Gótica</span></h3>
           </div>
         </div>
+        <div id="clarification-actions" hidden></div>
         <div class="compose">
           <p id="status" role="status" aria-live="polite"></p>
           <button class="button button-outline" id="retry" type="button" hidden>Reintentar trabajo pausado</button>
@@ -100,7 +101,7 @@
     <div class="preview-dialog-head"><h2 id="preview-dialog-title">Vista previa ampliada</h2><button class="button button-outline" id="close-preview" type="button">Cerrar ×</button></div>
   </dialog>
 <script>
-const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,pendingSend=null,sending=false;
+const messages=document.querySelector('#messages'), status=document.querySelector('#status'), preview=document.querySelector('#preview'), previewNote=document.querySelector('#preview-note'), retryButton=document.querySelector('#retry'), emptyTemplate=document.querySelector('#empty-state').cloneNode(true), accessPanel=document.querySelector('#access-panel'), workspace=document.querySelector('#workspace'), logoutButton=document.querySelector('#logout'), historyPicker=document.querySelector('#history-picker');let conversationId=null,lastRunId=null,streamController=null,sessionReady=null,viewGeneration=0,pendingSend=null,pendingClarification=null,sending=false;
 const inviteParams=new URLSearchParams(location.hash.slice(1));let inviteToken=inviteParams.get('type')==='invite'?inviteParams.get('access_token'):null;
 if(inviteToken){history.replaceState(null,'',location.pathname+location.search);document.querySelector('#login-form').hidden=true;document.querySelector('#invite-form').hidden=false;document.querySelector('#guest-login').hidden=true;document.querySelector('#access-divider').hidden=true}
 function showAccess(session){const signedIn=session?.authenticated||session?.status==='ready';accessPanel.hidden=!!signedIn;workspace.hidden=!signedIn;logoutButton.hidden=!session?.authenticated;if(!signedIn){streamController?.abort();conversationId=null;lastRunId=null}logoutButton.textContent=session?.email?'Salir · '+session.email:'Salir'}
@@ -113,6 +114,17 @@ document.querySelector('#guest-login').onclick=()=>enter('/api/auth/guest',{});
 logoutButton.onclick=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});sessionReady=null;showAccess(null);resetConversation();historyPicker.replaceChildren(new Option('Abrir conversación anterior',''))};
 ensureSession().then(()=>refreshHistory()).catch(error=>{if(error.message!=='Inicia sesión para continuar')document.querySelector('#access-status').textContent=error.message});
 function bubble(role,content){document.querySelector('#empty-state')?.remove();let el=document.createElement('div');el.className='bubble '+role;el.textContent=content;messages.append(el);messages.scrollTop=messages.scrollHeight}
+function showClarificationChoices(question){
+  const panel=document.querySelector('#clarification-actions');panel.replaceChildren();panel.hidden=!question;if(!question)return;
+  const hint=document.createElement('p');hint.textContent='Elige una opción o escribe tu propia respuesta.';panel.append(hint);
+  const choices=document.createElement('div');choices.className='clarification-buttons';panel.append(choices);
+  const matches=[...question.matchAll(/^\s*([AB])[).:]\s*(.{1,180})\s*$/gim)];
+  const named=matches.length===2&&matches[0][1].toUpperCase()==='A'&&matches[1][1].toUpperCase()==='B';
+  const add=(label,answer)=>{const button=document.createElement('button');button.type='button';button.className='button button-outline';button.textContent=label;button.onclick=()=>{const input=document.querySelector('#content');input.value=answer;document.querySelector('#send').requestSubmit()};choices.append(button)};
+  if(named){for(const match of matches)add(match[1].toUpperCase()+' · '+match[2].trim(),match[1].toUpperCase()+') '+match[2].trim())}
+  else add('A · Decide tú con supuestos','Elige una solución razonable y autocontenida, documenta tus supuestos y continúa.');
+  const free=document.createElement('button');free.type='button';free.className='button button-outline';free.textContent=named?'Responder libremente':'B · Dar mis especificaciones';free.onclick=()=>document.querySelector('#content').focus();choices.append(free);
+}
 function addTrace(event){let li=document.createElement('li');li.textContent=event.node+': '+event.status;document.querySelector('#traces').append(li);li.scrollIntoView({block:'nearest'})}
 function showFiles(files){
   const picker=document.querySelector('#file-picker'),out=document.querySelector('#files');
@@ -137,8 +149,9 @@ function showFiles(files){
 }
 function resetConversation(){
   closePreviewDialog();
-  viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;historyPicker.value='';
+  viewGeneration++;streamController?.abort();conversationId=null;lastRunId=null;pendingSend=null;pendingClarification=null;historyPicker.value='';
   messages.replaceChildren(emptyTemplate.cloneNode(true));document.querySelector('#conversation').textContent='';
+  showClarificationChoices(null);
   document.querySelector('#traces').replaceChildren();showFiles([]);document.querySelector('#preview-section').hidden=true;preview.hidden=true;preview.srcdoc='';showExample(null);
   retryButton.hidden=true;status.textContent='';
 }
@@ -158,9 +171,10 @@ async function openConversation(id){
   const response=await fetch('/api/conversations/'+encodeURIComponent(id),{credentials:'same-origin'});
   if(!response.ok)throw Error('No se pudo abrir la conversación');
   if(generation!==viewGeneration)return;
-  const saved=await response.json();if(generation!==viewGeneration)return;conversationId=saved.id;
+  const saved=await response.json();if(generation!==viewGeneration)return;conversationId=saved.id;pendingClarification=saved.pending_clarification;
   document.querySelector('#conversation').textContent='Conversación: '+saved.id;
   messages.replaceChildren(emptyTemplate.cloneNode(true));
+  showClarificationChoices(pendingClarification);
   for(const message of saved.messages)bubble(message.role,message.content);
   const run=saved.last_run;if(!run)return;
   lastRunId=run.id;
@@ -218,7 +232,7 @@ function showExample(run,request=''){
   else frame.removeAttribute('src');
 }
 document.querySelector('#new').onclick=resetConversation;
-async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);showExample(result,[...messages.querySelectorAll('.bubble.user')].at(-1)?.textContent||'');break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
+async function watchRun(runId,sessionId=conversationId,generation=viewGeneration){lastRunId=runId;retryButton.hidden=true;streamTraces(sessionId,runId);while(generation===viewGeneration){await new Promise(resolve=>setTimeout(resolve,900));if(generation!==viewGeneration)return;const result=await api('/api/runs/'+runId);if(generation!==viewGeneration)return;if(['approved','answered','needs_clarification','exhausted','technical_error','paused'].includes(result.status)){bubble('assistant',result.result||result.error||'Sin respuesta');if(result.status==='needs_clarification')pendingClarification=result.result;else if(['approved','exhausted'].includes(result.status))pendingClarification=null;showClarificationChoices(pendingClarification);const labels={approved:'Aprobado',answered:'Pregunta respondida',needs_clarification:'Aclaración pendiente',exhausted:'Límite de revisión alcanzado',technical_error:'Error técnico',paused:'Pausado'},validation={passed:'validación aislada completada',failed:'validación fallida',error:'validación no disponible',not_executed:'código no ejecutado'};status.textContent=labels[result.status]+' · '+validation[result.validation_status];retryButton.hidden=result.status!=='paused';const files=await api('/api/runs/'+runId+'/files');if(generation!==viewGeneration)return;showFiles(files);showPreview(files,result);showExample(result,[...messages.querySelectorAll('.bubble.user')].at(-1)?.textContent||'');break}status.textContent=result.status==='queued'?'En cola…':'Procesando…'}}
 retryButton.onclick=async()=>{try{const run=await api('/api/runs/'+lastRunId+'/retry',{method:'POST'});await watchRun(run.run_id)}catch(error){status.textContent=error.message}};
 const composer=document.querySelector('#content');
 composer.addEventListener('keydown',event=>{
@@ -232,5 +246,5 @@ composer.addEventListener('keydown',event=>{
     if(!event.repeat)document.querySelector('#send').requestSubmit();
   }
 });
-document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content||sending)return;const generation=viewGeneration;if(!pendingSend||pendingSend.content!==content||pendingSend.conversationId!==conversationId)pendingSend={content,conversationId,id:crypto.randomUUID()};const attempt=pendingSend;sending=true;try{if(!conversationId){const created=await api('/api/conversations',{method:'POST'});if(generation!==viewGeneration)return;conversationId=created.id;attempt.conversationId=created.id;document.querySelector('#conversation').textContent='Conversación: '+created.id;refreshHistory().catch(()=>{})}const id=conversationId;if(generation!==viewGeneration)return;const run=await api('/api/conversations/'+id+'/messages',{method:'POST',body:JSON.stringify({content,client_message_id:attempt.id})});if(pendingSend===attempt)pendingSend=null;if(generation!==viewGeneration)return;bubble('user',content);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();showExample(null);status.textContent='En cola…';sending=false;await watchRun(run.run_id,id,generation)}catch(error){if(generation===viewGeneration)status.textContent=error.message}finally{sending=false}};
+document.querySelector('#send').onsubmit=async(event)=>{event.preventDefault();const content=document.querySelector('#content').value.trim();if(!content||sending)return;const generation=viewGeneration;if(!pendingSend||pendingSend.content!==content||pendingSend.conversationId!==conversationId)pendingSend={content,conversationId,id:crypto.randomUUID()};const attempt=pendingSend;sending=true;try{if(!conversationId){const created=await api('/api/conversations',{method:'POST'});if(generation!==viewGeneration)return;conversationId=created.id;attempt.conversationId=created.id;document.querySelector('#conversation').textContent='Conversación: '+created.id;refreshHistory().catch(()=>{})}const id=conversationId;if(generation!==viewGeneration)return;const run=await api('/api/conversations/'+id+'/messages',{method:'POST',body:JSON.stringify({content,client_message_id:attempt.id})});if(pendingSend===attempt)pendingSend=null;if(generation!==viewGeneration)return;bubble('user',content);showClarificationChoices(null);document.querySelector('#content').value='';document.querySelector('#traces').replaceChildren();showExample(null);status.textContent='En cola…';sending=false;await watchRun(run.run_id,id,generation)}catch(error){if(generation===viewGeneration)status.textContent=error.message}finally{sending=false}};
 </script></body></html>

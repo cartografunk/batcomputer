@@ -75,6 +75,11 @@ textarea::placeholder { color: #857992; opacity: 1; }
 .bubble { max-width: 86%; padding: 13px 16px; margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; border: 1px solid var(--line); }
 .bubble.user { margin-left: auto; background: #271536; border-color: rgba(180,79,255,.37); }
 .bubble.assistant { margin-right: auto; background: #191723; }
+#clarification-actions { padding: 0 28px 14px; }
+#clarification-actions[hidden] { display: none; }
+#clarification-actions p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.clarification-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.clarification-buttons .button { min-height: 36px; height: auto; padding: 8px 12px; text-align: left; white-space: normal; line-height: 1.4; }
 .compose { margin-top: auto; padding: 0 28px 26px; }
 #status { min-height: 21px; margin: 0 0 8px; color: var(--purple-bright); font: 11px var(--mono); }
 #retry { margin-bottom: 12px; }
@@ -118,4 +123,4 @@ textarea::placeholder { color: #857992; opacity: 1; }
 #example-section a { color: var(--purple-bright); }
 .site-footer { padding: 24px 0 0; display: flex; justify-content: space-between; gap: 20px; color: #877c97; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 @media (max-width: 900px) { .workspace { grid-template-columns: 1fr; } .chat-panel { min-height: 620px; } .sidebar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); } .trace-panel { grid-column: 1 / -1; } }
-@media (max-width: 600px) { .site-header { min-height: 66px; } .brand { font-size: 14px; letter-spacing: .1em; } .header-links a { font-size: 10px; } .intro { padding-top: 35px; } .intro h1 { font-size: clamp(40px,11vw,60px); } .panel-head, #messages, .compose, .side-section { padding-left: 17px; padding-right: 17px; } .panel-head { align-items: center; flex-wrap: wrap; } .panel-head h2 { font-size: 19px; } .conversation-actions { width: 100%; flex-wrap: wrap; } .conversation-actions select { flex: 1; width: auto; min-width: 160px; } .conversation-actions .button { flex: 1; } .sidebar { display: flex; } #send { flex-direction: column; } #send .button { min-height: 42px; } .site-footer { flex-direction: column; gap: 5px; } }
+@media (max-width: 600px) { .site-header { min-height: 66px; } .brand { font-size: 14px; letter-spacing: .1em; } .header-links a { font-size: 10px; } .intro { padding-top: 35px; } .intro h1 { font-size: clamp(40px,11vw,60px); } .panel-head, #messages, #clarification-actions, .compose, .side-section { padding-left: 17px; padding-right: 17px; } .panel-head { align-items: center; flex-wrap: wrap; } .panel-head h2 { font-size: 19px; } .conversation-actions { width: 100%; flex-wrap: wrap; } .conversation-actions select { flex: 1; width: auto; min-width: 160px; } .conversation-actions .button { flex: 1; } .sidebar { display: flex; } #send { flex-direction: column; } #send .button { min-height: 42px; } .site-footer { flex-direction: column; gap: 5px; } }
