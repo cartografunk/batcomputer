@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.sqlite*
+.coverage
+*.egg-info/
+evals/results/

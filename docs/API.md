@@ -1,0 +1,29 @@
+# Contrato HTTP de Batcomputer para la interfaz
+
+Con `AUTH_MODE=supabase`, `GET /api/session` informa si existe una sesión válida. `POST /api/auth/login` verifica correo y contraseña en Supabase Auth; `POST /api/auth/accept-invite` acepta un token de invitación y establece la primera contraseña; `POST /api/auth/guest` abre una sesión limitada; `POST /api/auth/logout` cierra la sesión. La cookie es `HttpOnly`, `SameSite=Lax` y `Secure` en producción. Las cookies anónimas anteriores y los Bearer legados no sirven en este modo. Los recursos de otra cuenta o invitado devuelven 404. JSON UTF-8. `401` indica sesión ausente o credencial inválida, `429` indica límite de uso, `422` indica entrada inválida. Los UUID identifican recursos pero no autorizan acceso. `AUTH_MODE=legacy` conserva el comportamiento anónimo anterior solo para desarrollo o transición.
+
+| Método | Ruta | Respuesta |
+|---|---|---|
+| GET | `/api/session` | `{authenticated,role,email}` en modo Supabase |
+| POST | `/api/auth/login` | `{email,password}` → cookie y `{authenticated:true,role:"member",email}` |
+| POST | `/api/auth/accept-invite` | `{access_token,password}` → activa invitación y cookie |
+| POST | `/api/auth/guest` | Cookie temporal y `{authenticated:true,role:"guest"}` |
+| POST | `/api/auth/logout` | Borra la cookie |
+| POST | `/api/conversations` | `201 {id,created_at}` |
+| GET | `/api/conversations` | Últimas 20 conversaciones de la cuenta o invitado actual |
+| GET | `/api/conversations/{id}` | `{id,created_at,pending_clarification,last_run,messages:[{id,role,content,created_at}]}` |
+| POST | `/api/conversations/{id}/messages` | Enviar `{content,client_message_id?}`; `202 {run_id,status}` |
+| GET | `/api/runs/{id}` | `{id,conversation_id,status,result,attempts,api_retries,validation_status,recovery_count,error,created_at,updated_at}` |
+| POST | `/api/runs/{id}/retry` | `202 {run_id,status:"queued"}` si el run está `paused` y no hay runs posteriores; `409` en otro caso |
+| GET | `/api/runs/{id}/traces` | Array de `{stage,attempt,duration_ms,input,output,error,created_at}` |
+| GET | `/stream/{session_id}?run_id={id}` | SSE autenticado con eventos `status` y `trace`; cada traza contiene `{node,status,attempt,duration_ms}` |
+| GET | `/api/runs/{id}/files` | Array de `{attempt,path,content}`; incluye versiones rechazadas |
+| GET | `/health` | `{status:"ok"}` si PostgreSQL responde; `503` en caso contrario. No requiere token. |
+
+Estados: `queued` (pendiente), `running` (en proceso), `answered` (pregunta contestada sin implementación), `needs_clarification` (falta una decisión del usuario), `approved` (Reviewer aprobó), `exhausted` (rechazo tras `MAX_CODER_ATTEMPTS`), `paused` (proveedor temporalmente indisponible; reintentable) y `technical_error` (otro fallo técnico o interrupciones repetidas). Los últimos seis terminan la ejecución actual; `paused` puede reencolarse y después de `needs_clarification` se puede enviar otro mensaje. `result` contiene solo la respuesta final para el chat. `attempts` cuenta invocaciones de Coder; `api_retries` cuenta reintentos de transporte del proveedor aparte.
+
+`client_message_id` es opcional para clientes antiguos; el frontend lo genera por intención de envío. Repetirlo con el mismo contenido devuelve el `run_id` original sin consumir otra cuota. Reutilizarlo con contenido diferente devuelve `409`. El servidor almacena un hash del contenido exacto y la base impone unicidad por conversación, incluso ante solicitudes concurrentes. Sin el campo, cada POST conserva el comportamiento anterior.
+
+`validation_status` es independiente de `status`: `not_executed` (sin `E2B_API_KEY` o run sin código), `passed`, `failed` (compilación o pruebas fallaron) o `error` (infraestructura del sandbox falló). Un `approved` puede coexistir con `error`: ese resultado significa aprobación estática sin validación completa. La traza `validator` incluye rutas, salida acotada y duración por intento. `recovery_count` indica cuántas veces se recuperó un run interrumpido. Los trabajos se recuperan hasta `MAX_JOB_RECOVERIES`; no hay garantía de exactamente una ejecución externa.
+
+El frontend abre `/stream/{session_id}` con `fetch` y la cookie del navegador para ver cada transición; consulta `/api/runs/{id}` hasta un estado terminal para la respuesta final. Cada traza lleva un identificador, aunque el cliente actual no reconecta automáticamente el stream. En una pregunta o aclaración, `/files` queda vacío. En una entrega, Documenter añade un `README.md`. Para obtener el estado del conjunto de archivos del hilo, recupere las versiones aprobadas a través de los runs anteriores; la API de archivos por run conserva todas las propuestas, incluidas las rechazadas. Una vista previa de HTML/JS solo debe renderizarse en un iframe `sandbox="allow-scripts"` sin `allow-same-origin`, con CSP que bloquee conexiones y recursos externos. No navegue directamente a contenido generado bajo el origen de la aplicación. El build del diseñador se sirve desde `app/static`; las rutas `/api`, `/health`, `/stream` y `/flappy` están reservadas.
