@@ -3,7 +3,7 @@
 Batcomputer es un aplicativo de un sistema multiagente de inteligencia artificial. El sistema recibe un ticket de desarrollo en lenguaje natural y un equipo de agentes de IA lo planea, lo programa, lo prueba y lo revisa hasta entregar código funcional revisado en su sintaxis. Además el sistema permite la **trazabilidad** al habilitar el mismo hilo para pedir cambios o hacer preguntas, y reportar qué decidió cada agente en un panel de trazas aparte.
 
 **Sistema en línea:** <https://batcomputer.cartografunk.com/> (puedes entrar con **Entrar como invitado**).
-**Resumen de la prueba (qué haría distinto y qué pasa cuando Reviewer y Coder no coinciden):** [docs/Resumen.docx](docs/Resumen.docx)
+**Resumen de la prueba (qué haría distinto y qué pasa cuando Reviewer y Coder no coinciden):** [docs/RESUMEN.md](docs/RESUMEN.md)
 
 ## Cómo funciona (versión corta)
 
@@ -119,7 +119,7 @@ Corre como un solo servicio en Railway (una réplica, volumen persistente para c
 
 ## Documentos
 
-- [Resumen de la prueba](docs/Resumen.docx)
+- [Resumen de la prueba](docs/RESUMEN.md)
 - [Configuración detallada](docs/CONFIGURACION.md)
 - [Contrato de la API](docs/API.md)
 - [Decisiones y límites](docs/DECISIONS.md)
